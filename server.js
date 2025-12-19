@@ -16,24 +16,44 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v10",
-    version: "10.0.0",
-    name: "Phim4K VIP (Smart Search)",
-    description: "Fix lỗi tìm kiếm tên phim & Series",
+    id: "com.phim4k.vip.final.v11",
+    version: "11.0.0",
+    name: "Phim4K VIP (Ultra Search)",
+    description: "Fix lỗi tìm kiếm nâng cao (Fallback & NaN Year)",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === HÀM CHUẨN HÓA TÊN THÔNG MINH ===
+// === 1. HÀM CHUẨN HÓA MẠNH MẼ ===
 function normalizeTitle(title) {
     return title.toLowerCase()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, "") // Bỏ dấu tiếng Việt/Pháp...
-        .replace(/^(the|a|an)\s+/, "")     // Bỏ mạo từ đầu câu (The Great Flood -> Great Flood)
-        .replace(/['":\-.]/g, "")          // Bỏ dấu câu đặc biệt
-        .replace(/\s+/g, " ")              // Gộp nhiều khoảng trắng thành 1
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, "")
+        .replace(/^(the|a|an)\s+/, "")
+        .replace(/['":\-.]/g, " ") // Thay dấu câu bằng khoảng trắng
+        .replace(/\s+/g, " ")
         .trim();
+}
+
+// === 2. TẠO DANH SÁCH TỪ KHÓA TÌM KIẾM ===
+function getSearchQueries(originalName) {
+    const clean = normalizeTitle(originalName);
+    const queries = [originalName]; // Ưu tiên 1: Tên gốc
+
+    // Ưu tiên 2: Tên đã làm sạch (bỏ The, dấu câu)
+    if (clean !== originalName.toLowerCase()) queries.push(clean);
+
+    // Ưu tiên 3: Nếu có dấu hai chấm (F1: The Movie), thử tìm phần trước dấu hai chấm (F1)
+    if (originalName.includes(":")) {
+        queries.push(originalName.split(":")[0].trim());
+    }
+
+    // Ưu tiên 4: Thử bỏ hết khoảng trắng (Dành cho 10 Dance -> 10dance)
+    const noSpace = clean.replace(/\s/g, "");
+    if (noSpace !== clean) queries.push(noSpace);
+
+    return [...new Set(queries)]; // Loại bỏ trùng lặp
 }
 
 async function getCinemetaMetadata(type, imdbId) {
@@ -57,7 +77,6 @@ function extractEpisodeInfo(filename) {
 builder.defineStreamHandler(async ({ type, id }) => {
     if (!id.startsWith("tt")) return { streams: [] };
 
-    // Tách ID cho Series
     const [imdbId, seasonStr, episodeStr] = id.split(':');
     const season = seasonStr ? parseInt(seasonStr) : null;
     const episode = episodeStr ? parseInt(episodeStr) : null;
@@ -65,61 +84,79 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const meta = await getCinemetaMetadata(type, imdbId);
     if (!meta) return { streams: [] };
 
-    // CHUẨN HÓA TÊN GỐC
     const originalName = meta.name;
-    const cleanName = normalizeTitle(originalName); // Tên sạch (bỏ The, bỏ dấu)
-    const year = parseInt(meta.year);
+    const cleanName = normalizeTitle(originalName);
+    
+    // FIX QUAN TRỌNG: Kiểm tra xem có năm hay không (tránh NaN)
+    let year = parseInt(meta.year);
+    const hasYear = !isNaN(year); 
 
-    console.log(`\n=== Tìm: "${originalName}" -> Clean: "${cleanName}" (${year}) ===`);
+    // Tạo danh sách các từ khóa để thử tìm
+    const searchQueries = getSearchQueries(originalName);
+    console.log(`\n=== Xử lý: "${originalName}" (${hasYear ? year : 'No Year'}) ===`);
+    console.log(`-> Các từ khóa sẽ thử: ${JSON.stringify(searchQueries)}`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
-    // Mẹo: Search tên gốc, nhưng so sánh bằng tên sạch
-    const searchUrl = `${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(originalName)}.json`;
+    let match = null;
 
-    try {
-        const res = await axios.get(searchUrl, { headers: HEADERS, timeout: 8000 });
-        if (!res.data || !res.data.metas || res.data.metas.length === 0) {
-            console.log("-> Server không trả về kết quả nào.");
-            return { streams: [] };
-        }
+    // === VÒNG LẶP TÌM KIẾM (FALLBACK) ===
+    for (const query of searchQueries) {
+        if (match) break; // Nếu đã tìm thấy thì dừng
 
-        // === LOGIC KHỚP PHIM (NÂNG CẤP) ===
-        const match = res.data.metas.find(m => {
-            const serverNameClean = normalizeTitle(m.name);
+        const searchUrl = `${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(query)}.json`;
+        try {
+            // console.log(`-> Đang thử tìm: "${query}"...`);
+            const res = await axios.get(searchUrl, { headers: HEADERS, timeout: 5000 }); // Giảm timeout cho nhanh
             
-            // 1. So sánh tên (Chứa nhau)
-            // Stremio: "great flood" vs Server: "great flood" -> OK
-            // Stremio: "10dance" vs Server: "10 dance" (đã normalize hết dấu cách) -> OK
-            // Stremio: "f1" vs Server: "f1 the movie" -> OK
-            const nameMatch = serverNameClean.includes(cleanName) || cleanName.includes(serverNameClean);
+            if (res.data && res.data.metas && res.data.metas.length > 0) {
+                
+                // Lọc kết quả trả về
+                match = res.data.metas.find(m => {
+                    const serverNameClean = normalizeTitle(m.name);
+                    
+                    // 1. So sánh tên (Linh hoạt hơn)
+                    const nameMatch = serverNameClean.includes(cleanName) 
+                                   || cleanName.includes(serverNameClean)
+                                   || serverNameClean.replace(/\s/g, "") === cleanName.replace(/\s/g, ""); // Check 10dance
 
-            // 2. So sánh năm (Nới rộng lên +/- 2 năm)
-            // F1 (2025) có thể server ghi 2024 hoặc 2026
-            let yearMatch = false;
-            const yearMatches = m.name.match(/\d{4}/g);
-            if (yearMatches) {
-                yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 2);
-            } else if (m.releaseInfo) {
-                yearMatch = m.releaseInfo.includes(year.toString()) 
-                         || m.releaseInfo.includes((year-1).toString()) 
-                         || m.releaseInfo.includes((year+1).toString());
-            } else {
-                // Nếu server không ghi năm, nhưng tên khớp cực chuẩn -> Tạm chấp nhận
-                if (serverNameClean === cleanName) yearMatch = true; 
+                    // 2. So sánh năm (FIXED NaN)
+                    let yearMatch = false;
+                    if (!hasYear) {
+                        // Nếu Stremio không có năm, ta BỎ QUA check năm -> Auto True
+                        yearMatch = true;
+                    } else {
+                        // Nếu có năm, so sánh như cũ
+                        const yearMatches = m.name.match(/\d{4}/g);
+                        if (yearMatches) {
+                            yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 2);
+                        } else if (m.releaseInfo) {
+                            yearMatch = m.releaseInfo.includes(year.toString()) 
+                                     || m.releaseInfo.includes((year-1).toString()) 
+                                     || m.releaseInfo.includes((year+1).toString());
+                        } else {
+                            // Server không ghi năm -> Chấp nhận nếu tên khớp
+                            yearMatch = true;
+                        }
+                    }
+
+                    return nameMatch && yearMatch;
+                });
             }
-
-            return nameMatch && yearMatch;
-        });
-
-        if (!match) {
-            console.log("-> Có kết quả nhưng không khớp tên/năm.");
-            return { streams: [] };
+        } catch (e) {
+            // Lỗi mạng hoặc timeout thì thử từ khóa tiếp theo
         }
+    }
 
-        const fullId = match.id;
-        console.log(`-> Đã khớp: ${match.name} | ID: ${fullId}`);
+    if (!match) {
+        console.log("-> Thất bại: Không tìm thấy phim nào khớp.");
+        return { streams: [] };
+    }
 
-        // === XỬ LÝ STREAM (Giữ nguyên logic v9) ===
+    const fullId = match.id;
+    console.log(`-> ĐÃ KHỚP: ${match.name} | ID: ${fullId}`);
+
+    // === PHẦN LẤY LINK STREAM (Giữ nguyên) ===
+    try {
         if (type === 'movie') {
             const streamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(fullId)}.json`;
             const streamRes = await axios.get(streamUrl, { headers: HEADERS });
@@ -133,12 +170,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     }))
                 };
             }
-        }
-
-        if (type === 'series') {
+        } else if (type === 'series') {
             const metaUrl = `${TARGET_BASE_URL}/meta/${type}/${encodeURIComponent(fullId)}.json`;
             const metaRes = await axios.get(metaUrl, { headers: HEADERS });
-            
             if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) return { streams: [] };
 
             const matchedVideos = metaRes.data.meta.videos.filter(vid => {
@@ -168,9 +202,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
             }
             return { streams: streams };
         }
-
-    } catch (error) {
-        console.error(`Lỗi: ${error.message}`);
+    } catch (err) {
+        console.error(`Lỗi lấy stream: ${err.message}`);
     }
 
     return { streams: [] };
