@@ -8,32 +8,29 @@ if (!TARGET_MANIFEST_URL) {
     process.exit(1);
 }
 
-// Lấy Base URL sạch (bỏ phần manifest.json)
 const getBaseUrl = (url) => url.replace('/manifest.json', '');
 const TARGET_BASE_URL = getBaseUrl(TARGET_MANIFEST_URL);
 
-// Headers giả lập trình duyệt (quan trọng)
+// Headers giả lập trình duyệt để tránh bị chặn
 const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.smart.final.v6",
-    version: "6.0.0",
-    name: "Phim4K VIP (Auto-Link)",
-    description: "Tự động lấy link stream VIP",
+    id: "com.phim4k.vip.pro",
+    version: "7.0.0",
+    name: "Phim4K VIP (Full Source)",
+    description: "Hiển thị đầy đủ link VIP & Tên gốc",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// Hàm làm sạch tên để so sánh
 function cleanText(text) {
     return text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
 }
 
-// 1. Lấy thông tin từ Cinemeta
 async function getCinemetaMetadata(type, imdbId) {
     try {
         const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${imdbId}.json`);
@@ -42,67 +39,109 @@ async function getCinemetaMetadata(type, imdbId) {
 }
 
 builder.defineStreamHandler(async ({ type, id }) => {
-    // Chỉ xử lý ID IMDB (tt...)
-    if (!id.startsWith("tt")) return { streams: [] };
+    console.log(`\n=== Xử lý request: ${type} - ${id} ===`);
 
-    console.log(`\n=== Xử lý phim: ${id} ===`);
+    // 1. Xử lý ID cho Series (ví dụ: tt12345:1:1 -> lấy tt12345)
+    let imdbId = id;
+    let season = null;
+    let episode = null;
 
-    const meta = await getCinemetaMetadata(type, id);
-    if (!meta) return { streams: [] };
+    if (id.includes(":")) {
+        const parts = id.split(":");
+        imdbId = parts[0];
+        season = parts[1];
+        episode = parts[2];
+    }
+
+    if (!imdbId.startsWith("tt")) return { streams: [] };
+
+    // 2. Lấy tên phim gốc từ Cinemeta
+    const meta = await getCinemetaMetadata(type, imdbId);
+    if (!meta) {
+        console.log("-> Không lấy được metadata.");
+        return { streams: [] };
+    }
 
     const englishName = cleanText(meta.name);
-    const year = meta.year;
+    const year = meta.year; // Năm phát hành (quan trọng để lọc)
 
-    // 2. Tìm kiếm trên Phim4K
+    console.log(`-> Phim: ${meta.name} (${year})`);
+
+    // 3. Tìm kiếm trên Phim4K
+    // Lưu ý: Series và Movie dùng catalog ID khác nhau
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchUrl = `${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(meta.name)}.json`;
 
     try {
-        console.log(`-> Đang tìm: "${meta.name}" (${year})`);
         const res = await axios.get(searchUrl, { headers: HEADERS, timeout: 8000 });
         
         if (!res.data || !res.data.metas || res.data.metas.length === 0) {
-            console.log("-> Không tìm thấy phim trên server.");
+            console.log("-> Tìm kiếm trên Phim4K trả về rỗng.");
             return { streams: [] };
         }
 
-        // 3. Lọc kết quả trùng khớp
+        // 4. Thuật toán khớp phim (Chính xác hơn)
         const match = res.data.metas.find(m => {
             const serverName = cleanText(m.name);
-            // Khớp năm HOẶC Khớp tên tiếng Anh trong chuỗi tên dài
-            const matchYear = m.name.includes(year) || (m.releaseInfo && m.releaseInfo.includes(year));
-            const matchName = serverName.includes(englishName);
-            return matchYear && matchName;
+            
+            // Điều kiện 1: Phải có Năm phát hành (trong tên hoặc releaseInfo)
+            // Ví dụ server ghi: "Dune Part Two (2024)"
+            const hasYear = m.name.includes(year) || (m.releaseInfo && m.releaseInfo.includes(year));
+            
+            // Điều kiện 2: Tên server phải chứa tên tiếng Anh (tương đối)
+            const hasName = serverName.includes(englishName);
+
+            // Logic mở rộng: Nếu khớp tên chính xác mà không thấy năm (do server ghi thiếu), vẫn chấp nhận rủi ro
+            if (!hasYear && serverName === englishName) return true;
+
+            return hasYear && hasName;
         });
 
         if (match) {
-            // QUAN TRỌNG: Cắt lấy số ID (Ví dụ: phim4k:movie:11177 -> 11177)
+            // Lấy ID số (Quan trọng nhất để không bị lỗi Invalid ID Format)
+            // Ví dụ: phim4k:movie:11177 -> 11177
             const shortId = match.id.split(':').pop(); 
-            console.log(`-> Đã khớp: ${match.name} | ID số: ${shortId}`);
+            console.log(`-> Đã khớp ID: ${shortId} (Gốc: ${match.name})`);
 
-            // 4. Lấy Link Stream bằng ID số (Cách này chắc chắn chạy vì bạn đã test)
+            // 5. Gọi API lấy link stream
+            // Nếu là series, ta vẫn gọi ID của show. Việc lọc tập phim phụ thuộc vào server trả về gì.
+            // (Hiện tại ta cứ lấy hết link server trả về cho ID này)
             const streamUrl = `${TARGET_BASE_URL}/stream/${type}/${shortId}.json`;
             const streamRes = await axios.get(streamUrl, { headers: HEADERS });
 
-            if (streamRes.data && streamRes.data.streams) {
-                console.log(`-> THÀNH CÔNG: Tìm thấy ${streamRes.data.streams.length} link.`);
-                
-                // Trả về danh sách link cho Stremio
-                return {
-                    streams: streamRes.data.streams.map(s => ({
-                        title: s.title || s.name,   // Tên file (VD: 4K HDR...)
-                        url: s.url,                 // Link proxy xem phim
-                        name: "[Phim4K] VIP",       // Tên hiện trên addon
+            if (streamRes.data && streamRes.data.streams && streamRes.data.streams.length > 0) {
+                console.log(`-> Tìm thấy ${streamRes.data.streams.length} links.`);
+
+                // 6. MAP DỮ LIỆU (Theo đúng yêu cầu của bạn)
+                const finalStreams = streamRes.data.streams.map(s => {
+                    return {
+                        // Title: Giữ nguyên tên file gốc (VIETSUB DUNE...)
+                        title: s.title || s.name, 
+                        
+                        // Name: Nhãn hiển thị bên trái
+                        name: `[Phim4K] ${type === 'series' ? `S${season}E${episode}` : 'VIP'}`,
+                        
+                        // URL: Link xem phim
+                        url: s.url,
+                        
                         behaviorHints: {
                             notWebReady: false,
-                            bingeGroup: "phim4k-vip"
+                            bingeGroup: `phim4k-${shortId}`
                         }
-                    }))
-                };
+                    };
+                });
+
+                // Lọc link lỗi (nếu title chứa chữ "Error")
+                const cleanStreams = finalStreams.filter(s => !s.title.includes("Error: Invalid ID"));
+                
+                return { streams: cleanStreams };
             }
+        } else {
+            console.log("-> Có kết quả tìm kiếm nhưng không khớp tên/năm.");
         }
+
     } catch (error) {
-        console.error(`Lỗi: ${error.message}`);
+        console.error(`Lỗi hệ thống: ${error.message}`);
     }
 
     return { streams: [] };
