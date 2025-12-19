@@ -1,7 +1,7 @@
 {
-  "name": "stremio-addon-bridge",
+  "name": "phim4k-cinemeta-bridge",
   "version": "1.0.0",
-  "description": "Bridge streams from a custom addon to Cinemeta",
+  "description": "Bridge Phim4k streams to Cinemeta",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
