@@ -3,8 +3,8 @@ const axios = require("axios");
 
 const manifest = {
     id: "community.nguonc.phim",
-    version: "1.2.0",
-    name: "NguonC Phim (Embed Fix)",
+    version: "1.2.0", // Nâng version
+    name: "NguonC (Auto-Extract)",
     description: "Tự động bóc tách link M3U8 từ trang Embed. Hỗ trợ Phim Bộ.",
     resources: ["catalog", "meta", "stream"],
     types: ["movie", "series", "anime"],
@@ -22,7 +22,7 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 const API_BASE = "https://phim.nguonc.com/api";
 
-// --- HÀM HỖ TRỢ ---
+// --- HÀM HỖ TRỢ AN TOÀN ---
 function safeList(data) {
     if (!data) return [];
     if (Array.isArray(data)) return data;
@@ -30,45 +30,48 @@ function safeList(data) {
     return [];
 }
 
-// Hàm "đào" link m3u8 từ trang Embed
+// --- HÀM "ĐÀO" LINK M3U8 TỪ EMBED ---
 async function extractM3u8(embedUrl) {
     try {
-        console.log("Đang quét embed:", embedUrl);
-        // Giả lập trình duyệt để tránh bị chặn cơ bản
+        console.log(`--> Đang quét Embed: ${embedUrl}`);
         const response = await axios.get(embedUrl, {
             headers: {
+                // Giả danh trình duyệt thật để không bị chặn
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Referer': 'https://phim.nguonc.com/'
+                'Referer': 'https://phim.nguonc.com/' 
             },
-            timeout: 5000 // Chỉ đợi tối đa 5s
+            timeout: 6000 // Hủy nếu quá 6 giây
         });
         
         const html = response.data;
         
-        // Regex tìm tất cả các link .m3u8 trong source HTML
-        // Tìm chuỗi bắt đầu bằng http, kết thúc bằng .m3u8
+        // Regex tìm chuỗi bắt đầu bằng http và kết thúc bằng .m3u8
         const regex = /(https?:\/\/[^"']+\.m3u8)/g;
         const matches = html.match(regex);
         
         if (matches && matches.length > 0) {
             console.log("--> Đã tìm thấy link ẩn:", matches[0]);
             return matches[0];
+        } else {
+            console.log("--> Không tìm thấy m3u8 trong source.");
         }
     } catch (e) {
-        console.error("Không bóc tách được link:", e.message);
+        console.error("--> Lỗi khi extract:", e.message);
     }
     return null;
 }
 
-// --- 1. CATALOG ---
+// --- 1. CATALOG HANDLER ---
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
     let url = `${API_BASE}/films/phim-moi-cap-nhat?page=1`;
     if (extra && extra.search) {
         url = `${API_BASE}/films/search?keyword=${encodeURIComponent(extra.search)}`;
     }
+
     try {
         const response = await axios.get(url);
         const items = safeList(response.data.items);
+        
         return {
             metas: items.map(item => ({
                 id: `nguonc:${item.slug}`,
@@ -78,10 +81,12 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
                 description: `${item.year}`
             }))
         };
-    } catch (e) { return { metas: [] }; }
+    } catch (e) {
+        return { metas: [] };
+    }
 });
 
-// --- 2. META ---
+// --- 2. META HANDLER ---
 builder.defineMetaHandler(async ({ type, id }) => {
     if (!id.startsWith("nguonc:")) return { meta: {} };
     const slug = id.split(":")[1];
@@ -95,7 +100,9 @@ builder.defineMetaHandler(async ({ type, id }) => {
         const episodeServer = (movie.episodes && movie.episodes[0]) ? movie.episodes[0].server_data : [];
         const episodes = safeList(episodeServer);
 
-        const isSeries = episodes.length > 1 || JSON.stringify(categories).toLowerCase().includes("phim bộ");
+        // Logic Series: Có nhiều tập HOẶC Category chứa "Phim Bộ"
+        const isSeries = episodes.length > 1 || 
+                         JSON.stringify(categories).toLowerCase().includes("phim bộ");
         const stremioType = isSeries ? "series" : "movie";
 
         const metaObj = {
@@ -104,7 +111,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
             name: movie.name,
             poster: movie.thumb_url,
             background: movie.poster_url || movie.thumb_url,
-            description: movie.content,
+            description: movie.content || "Không có nội dung.",
             releaseInfo: `${movie.year}`,
             genres: categories.map(c => c.name),
         };
@@ -118,13 +125,19 @@ builder.defineMetaHandler(async ({ type, id }) => {
                 released: new Date().toISOString()
             }));
         } else {
+             // Fallback cho phim lẻ
              metaObj.videos = [{ id: `nguonc:${slug}:full`, title: "Full Movie", season: 1, episode: 1 }];
         }
+
         return { meta: metaObj };
-    } catch (e) { return { meta: { id, type: "movie", name: "Error" } }; }
+
+    } catch (e) {
+        // Trả về meta giả để không lỗi giao diện
+        return { meta: { id, type: "movie", name: "Lỗi tải thông tin" } };
+    }
 });
 
-// --- 3. STREAM (LOGIC MỚI) ---
+// --- 3. STREAM HANDLER (QUAN TRỌNG NHẤT) ---
 builder.defineStreamHandler(async ({ type, id }) => {
     if (!id.startsWith("nguonc:")) return { streams: [] };
     
@@ -135,34 +148,30 @@ builder.defineStreamHandler(async ({ type, id }) => {
     try {
         const response = await axios.get(`${API_BASE}/film/${filmSlug}`);
         const movie = response.data.movie;
+        
         const episodes = safeList((movie.episodes && movie.episodes[0]) ? movie.episodes[0].server_data : []);
-
         if (episodes.length === 0) return { streams: [] };
 
-        let targetEpisode = episodes.find(ep => ep.slug == episodeSlug) || episodes[0];
+        // Tìm tập phim
+        let targetEpisode = episodes.find(ep => ep.slug == episodeSlug);
+        if (!targetEpisode && !episodeSlug) targetEpisode = episodes[0]; // Mặc định tập 1
+        if (!targetEpisode && episodeSlug === "full") targetEpisode = episodes[0]; // Phim lẻ
+        
         if (!targetEpisode) return { streams: [] };
 
-        // Ưu tiên 1: Link M3U8 có sẵn trong API
-        let finalUrl = targetEpisode.link_m3u8;
-        let titlePrefix = "Direct";
+        const streams = [];
+        let m3u8Link = targetEpisode.link_m3u8;
 
-        // Ưu tiên 2: Nếu không có, thử "bóc tách" từ link Embed
-        if (!finalUrl && targetEpisode.link_embed) {
-            console.log("Không có m3u8 gốc, thử bóc tách từ Embed...");
-            const extracted = await extractM3u8(targetEpisode.link_embed);
-            if (extracted) {
-                finalUrl = extracted;
-                titlePrefix = "Extracted";
-            }
+        // BƯỚC 1: Nếu không có m3u8 sẵn, thử Extract từ Embed
+        if (!m3u8Link && targetEpisode.link_embed) {
+            m3u8Link = await extractM3u8(targetEpisode.link_embed);
         }
 
-        const streams = [];
-
-        // Nếu tìm được link video trực tiếp (M3U8)
-        if (finalUrl) {
+        // BƯỚC 2: Nếu tìm thấy m3u8 (có sẵn hoặc extract được)
+        if (m3u8Link) {
             streams.push({
-                title: `⚡ NguonC [${titlePrefix}] - ${targetEpisode.name}`,
-                url: finalUrl,
+                title: `⚡ NguonC Auto-Stream - ${targetEpisode.name}`,
+                url: m3u8Link,
                 behaviorHints: {
                     notWebReady: false,
                     bingeGroup: `nguonc-${filmSlug}`
@@ -170,10 +179,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
             });
         }
 
-        // Luôn thêm lựa chọn mở bằng Trình Duyệt (để dự phòng)
+        // BƯỚC 3: Luôn thêm link mở Web (Fallback an toàn)
         if (targetEpisode.link_embed) {
             streams.push({
-                title: `🌐 Mở Web (Nếu lỗi) - ${targetEpisode.name}`,
+                title: `🌐 Mở Trình Duyệt (Dự phòng) - ${targetEpisode.name}`,
                 externalUrl: targetEpisode.link_embed
             });
         }
@@ -188,4 +197,4 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port: port });
-console.log(`Addon running on port ${port}`);
+console.log(`Addon is running on port ${port}`);
