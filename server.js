@@ -17,10 +17,10 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v7",
-    version: "7.0.0",
-    name: "Phim4K VIP (Full Source)",
-    description: "Xem phim chất lượng gốc từ Phim4K",
+    id: "com.phim4k.vip.final.v8",
+    version: "8.0.0",
+    name: "Phim4K VIP (Full ID)",
+    description: "Fix lỗi ID format và hiện full source",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -39,17 +39,15 @@ async function getCinemetaMetadata(type, imdbId) {
 }
 
 builder.defineStreamHandler(async ({ type, id }) => {
-    // 1. Chỉ nhận ID IMDB
     if (!id.startsWith("tt")) return { streams: [] };
 
-    // 2. Lấy thông tin phim
     const meta = await getCinemetaMetadata(type, id);
     if (!meta) return { streams: [] };
 
     const englishName = cleanText(meta.name);
-    const year = parseInt(meta.year); // Chuyển năm về dạng số
+    const year = parseInt(meta.year);
 
-    // 3. Gọi API Search của Phim4K
+    // 1. Tìm kiếm phim
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchUrl = `${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(meta.name)}.json`;
 
@@ -61,48 +59,50 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return { streams: [] };
         }
 
-        // 4. THUẬT TOÁN KHỚP THÔNG MINH (Chấp nhận sai số năm +/- 1)
+        // 2. Lọc kết quả (Chấp nhận sai lệch 1 năm)
         const match = res.data.metas.find(m => {
             const serverName = cleanText(m.name);
-            
-            // Kiểm tra tên tiếng Anh có nằm trong tên server không
             const nameMatch = serverName.includes(englishName);
-
-            // Kiểm tra năm: Tìm chuỗi số 4 chữ số trong tên server (ví dụ 2024)
+            
+            // Logic tìm năm
             const yearMatches = m.name.match(/\d{4}/g);
             let yearMatch = false;
-
             if (yearMatches) {
-                // Nếu tìm thấy năm nào trong tên server sai lệch không quá 1 năm so với IMDB
                 yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 1);
             } else if (m.releaseInfo) {
-                // Fallback check releaseInfo
                 yearMatch = m.releaseInfo.includes(year.toString());
             }
-
             return nameMatch && yearMatch;
         });
 
         if (match) {
-            // Lấy ID số (bỏ phần phim4k:movie:...)
-            const shortId = match.id.split(':').pop();
-            console.log(`Đã khớp: ${match.name} | ID: ${shortId}`);
+            // SỬA ĐỔI QUAN TRỌNG: Lấy Full ID (phim4k:movie:11177)
+            const fullId = match.id; 
+            console.log(`Đã khớp: ${match.name} | Full ID: ${fullId}`);
 
-            // 5. Lấy Link Stream
-            const streamUrl = `${TARGET_BASE_URL}/stream/${type}/${shortId}.json`;
+            // Gửi request lấy link với FULL ID (encodeURIComponent để xử lý dấu hai chấm ':')
+            const streamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(fullId)}.json`;
             const streamRes = await axios.get(streamUrl, { headers: HEADERS });
 
             if (streamRes.data && streamRes.data.streams) {
-                // TRẢ VỀ TOÀN BỘ SOURCE (Khắc phục vấn đề 2, 3, 4)
+                console.log(`-> Tìm thấy ${streamRes.data.streams.length} link.`);
+                
+                // 3. Trả về danh sách link (Map đúng định dạng bạn yêu cầu)
                 return {
                     streams: streamRes.data.streams.map(s => {
                         return {
-                            name: "Phim4K VIP",      // Tên Addon bên trái
-                            title: s.title || s.name, // Hiển thị tên file gốc (VD: DUNE.PART.TWO...)
-                            url: s.url,               // Link Proxy gốc (Không qua Google)
+                            // Tên Addon (bên trái)
+                            name: "Phim4K VIP",      
+                            
+                            // Title: Hiện tên file gốc (VD: (VIETSUB) DUNE.PART.TWO...)
+                            title: s.title || s.name, 
+                            
+                            // URL: Link Proxy gốc (https://stremio.phim4k.xyz/proxy/...)
+                            url: s.url,               
+                            
                             behaviorHints: {
                                 notWebReady: false,
-                                bingeGroup: "phim4k-best"
+                                bingeGroup: "phim4k-vip"
                             }
                         };
                     })
