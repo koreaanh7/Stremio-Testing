@@ -11,24 +11,29 @@ if (!TARGET_MANIFEST_URL) {
 const getBaseUrl = (url) => url.replace('/manifest.json', '');
 const TARGET_BASE_URL = getBaseUrl(TARGET_MANIFEST_URL);
 
-// Headers quan trọng
 const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v9",
-    version: "9.0.0",
-    name: "Phim4K VIP (Series Fix)",
-    description: "Fix lỗi Series sắp xếp lộn xộn & gom đủ source 4K",
+    id: "com.phim4k.vip.final.v10",
+    version: "10.0.0",
+    name: "Phim4K VIP (Smart Search)",
+    description: "Fix lỗi tìm kiếm tên phim & Series",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-function cleanText(text) {
-    return text.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+// === HÀM CHUẨN HÓA TÊN THÔNG MINH ===
+function normalizeTitle(title) {
+    return title.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, "") // Bỏ dấu tiếng Việt/Pháp...
+        .replace(/^(the|a|an)\s+/, "")     // Bỏ mạo từ đầu câu (The Great Flood -> Great Flood)
+        .replace(/['":\-.]/g, "")          // Bỏ dấu câu đặc biệt
+        .replace(/\s+/g, " ")              // Gộp nhiều khoảng trắng thành 1
+        .trim();
 }
 
 async function getCinemetaMetadata(type, imdbId) {
@@ -38,67 +43,83 @@ async function getCinemetaMetadata(type, imdbId) {
     } catch (e) { return null; }
 }
 
-// Hàm trích xuất S và E từ tên file (Regex mạnh mẽ)
 function extractEpisodeInfo(filename) {
     const name = filename.toLowerCase();
-    
-    // Pattern 1: S01E01, S1E1, Season 1 Episode 1
     const matchSE = name.match(/(?:s|season)\s?(\d{1,2})[\s\xe.-]*(?:e|ep|episode|tap)\s?(\d{1,2})/);
     if (matchSE) return { s: parseInt(matchSE[1]), e: parseInt(matchSE[2]) };
-
-    // Pattern 2: 1x01
     const matchX = name.match(/(\d{1,2})x(\d{1,2})/);
     if (matchX) return { s: parseInt(matchX[1]), e: parseInt(matchX[2]) };
-
-    // Pattern 3: Chỉ có Episode (Tap 1, E01) -> Trả về Season = 0 (để xử lý sau)
     const matchE = name.match(/(?:e|ep|episode|tap)\s?(\d{1,2})/);
     if (matchE) return { s: 0, e: parseInt(matchE[1]) };
-
     return null;
 }
 
 builder.defineStreamHandler(async ({ type, id }) => {
-    // Chỉ xử lý ID IMDB
     if (!id.startsWith("tt")) return { streams: [] };
 
-    // Tách ID: tt123456 (Movie) hoặc tt123456:1:1 (Series)
+    // Tách ID cho Series
     const [imdbId, seasonStr, episodeStr] = id.split(':');
     const season = seasonStr ? parseInt(seasonStr) : null;
     const episode = episodeStr ? parseInt(episodeStr) : null;
 
-    console.log(`\n=== Xử lý: ${imdbId} | Type: ${type} | S:${season} E:${episode} ===`);
-
     const meta = await getCinemetaMetadata(type, imdbId);
     if (!meta) return { streams: [] };
 
-    const englishName = cleanText(meta.name);
+    // CHUẨN HÓA TÊN GỐC
+    const originalName = meta.name;
+    const cleanName = normalizeTitle(originalName); // Tên sạch (bỏ The, bỏ dấu)
     const year = parseInt(meta.year);
 
-    // 1. TÌM KIẾM PHIM/SERIES TRÊN SERVER
+    console.log(`\n=== Tìm: "${originalName}" -> Clean: "${cleanName}" (${year}) ===`);
+
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
-    const searchUrl = `${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(meta.name)}.json`;
+    // Mẹo: Search tên gốc, nhưng so sánh bằng tên sạch
+    const searchUrl = `${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(originalName)}.json`;
 
     try {
         const res = await axios.get(searchUrl, { headers: HEADERS, timeout: 8000 });
-        if (!res.data || !res.data.metas || res.data.metas.length === 0) return { streams: [] };
+        if (!res.data || !res.data.metas || res.data.metas.length === 0) {
+            console.log("-> Server không trả về kết quả nào.");
+            return { streams: [] };
+        }
 
-        // Logic khớp phim (như cũ)
+        // === LOGIC KHỚP PHIM (NÂNG CẤP) ===
         const match = res.data.metas.find(m => {
-            const serverName = cleanText(m.name);
-            const nameMatch = serverName.includes(englishName);
-            const yearMatches = m.name.match(/\d{4}/g);
+            const serverNameClean = normalizeTitle(m.name);
+            
+            // 1. So sánh tên (Chứa nhau)
+            // Stremio: "great flood" vs Server: "great flood" -> OK
+            // Stremio: "10dance" vs Server: "10 dance" (đã normalize hết dấu cách) -> OK
+            // Stremio: "f1" vs Server: "f1 the movie" -> OK
+            const nameMatch = serverNameClean.includes(cleanName) || cleanName.includes(serverNameClean);
+
+            // 2. So sánh năm (Nới rộng lên +/- 2 năm)
+            // F1 (2025) có thể server ghi 2024 hoặc 2026
             let yearMatch = false;
-            if (yearMatches) yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 1);
-            else if (m.releaseInfo) yearMatch = m.releaseInfo.includes(year.toString());
+            const yearMatches = m.name.match(/\d{4}/g);
+            if (yearMatches) {
+                yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 2);
+            } else if (m.releaseInfo) {
+                yearMatch = m.releaseInfo.includes(year.toString()) 
+                         || m.releaseInfo.includes((year-1).toString()) 
+                         || m.releaseInfo.includes((year+1).toString());
+            } else {
+                // Nếu server không ghi năm, nhưng tên khớp cực chuẩn -> Tạm chấp nhận
+                if (serverNameClean === cleanName) yearMatch = true; 
+            }
+
             return nameMatch && yearMatch;
         });
 
-        if (!match) return { streams: [] };
+        if (!match) {
+            console.log("-> Có kết quả nhưng không khớp tên/năm.");
+            return { streams: [] };
+        }
 
-        const fullId = match.id; // ID Server (VD: phim4k:series:999)
-        console.log(`-> Đã khớp Show: ${match.name} (ID: ${fullId})`);
+        const fullId = match.id;
+        console.log(`-> Đã khớp: ${match.name} | ID: ${fullId}`);
 
-        // ================= XỬ LÝ MOVIE (Đơn giản) =================
+        // === XỬ LÝ STREAM (Giữ nguyên logic v9) ===
         if (type === 'movie') {
             const streamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(fullId)}.json`;
             const streamRes = await axios.get(streamUrl, { headers: HEADERS });
@@ -114,51 +135,22 @@ builder.defineStreamHandler(async ({ type, id }) => {
             }
         }
 
-        // ================= XỬ LÝ SERIES (Phức tạp) =================
         if (type === 'series') {
-            // Bước A: Lấy CHI TIẾT Show (Metadata) để có danh sách tất cả các tập
-            // URL Meta thường là: /meta/series/phim4k:series:123.json
             const metaUrl = `${TARGET_BASE_URL}/meta/${type}/${encodeURIComponent(fullId)}.json`;
-            console.log(`-> Fetching Meta Series: ${metaUrl}`);
-            
             const metaRes = await axios.get(metaUrl, { headers: HEADERS });
             
-            if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) {
-                console.log("-> Không lấy được danh sách tập phim.");
-                return { streams: [] };
-            }
+            if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) return { streams: [] };
 
-            const allVideos = metaRes.data.meta.videos;
-            console.log(`-> Tổng số video tìm thấy trên server: ${allVideos.length}`);
-
-            // Bước B: Lọc thủ công (Bỏ qua cách chia Season của Server)
-            // Chúng ta tìm tất cả video có tên khớp với Season & Episode yêu cầu
-            const matchedVideos = allVideos.filter(vid => {
-                const vidTitle = vid.title || vid.name || "";
-                const info = extractEpisodeInfo(vidTitle);
-
+            const matchedVideos = metaRes.data.meta.videos.filter(vid => {
+                const info = extractEpisodeInfo(vid.title || vid.name || "");
                 if (!info) return false;
-
-                // Trường hợp 1: Tên file có đủ S và E (VD: S01E01) -> Phải khớp cả hai
-                if (info.s !== 0) {
-                    return info.s === season && info.e === episode;
-                }
-
-                // Trường hợp 2: Tên file chỉ có E (VD: Tap 1) 
-                // -> Chấp nhận nếu Episode khớp (Giả định server chia folder đúng hoặc đây là show 1 season)
-                if (info.s === 0) {
-                    return info.e === episode;
-                }
-                
+                if (info.s !== 0) return info.s === season && info.e === episode;
+                if (info.s === 0) return info.e === episode;
                 return false;
             });
 
-            console.log(`-> Số video khớp S${season}E${episode}: ${matchedVideos.length}`);
-
-            // Bước C: Lấy link stream cho từng video đã khớp
             const streams = [];
             for (const vid of matchedVideos) {
-                // vid.id là ID của tập phim (VD: phim4k:series:999:1:1 hoặc mã hash)
                 const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(vid.id)}.json`;
                 try {
                     const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
@@ -166,22 +158,19 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         sRes.data.streams.forEach(s => {
                             streams.push({
                                 name: `Phim4K S${season}E${episode}`,
-                                title: s.title || vid.title || `Episode ${episode}`, // Giữ tên gốc để biết bản 1080p hay 4K
+                                title: s.title || vid.title,
                                 url: s.url,
                                 behaviorHints: { notWebReady: false, bingeGroup: "phim4k-vip" }
                             });
                         });
                     }
-                } catch (err) {
-                    console.error(`Lỗi lấy stream video ${vid.id}: ${err.message}`);
-                }
+                } catch (e) {}
             }
-
             return { streams: streams };
         }
 
     } catch (error) {
-        console.error(`Lỗi tổng: ${error.message}`);
+        console.error(`Lỗi: ${error.message}`);
     }
 
     return { streams: [] };
