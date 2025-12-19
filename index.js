@@ -3,9 +3,9 @@ const axios = require("axios");
 
 const manifest = {
     id: "community.nguonc.phim",
-    version: "1.0.5", // Tăng version lên để Stremio cập nhật
+    version: "1.0.8", // Tăng version để ép Stremio cập nhật cache
     name: "NguonC Phim & Anime",
-    description: "Xem phim mới, phim bộ, anime từ NguonC. Hỗ trợ tìm kiếm.",
+    description: "Xem phim miễn phí từ NguonC. Hỗ trợ tự động chuyển tập.",
     resources: ["catalog", "meta", "stream"],
     types: ["movie", "series", "anime"],
     catalogs: [
@@ -22,76 +22,71 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 const API_BASE = "https://phim.nguonc.com/api";
 
-// --- HÀM HỖ TRỢ AN TOÀN (Safe Parsing) ---
-function safeGet(fn, defaultValue) {
+// --- HELPERS ---
+// Hàm lấy dữ liệu an toàn, nếu lỗi trả về fallback
+function safeGet(fn, fallback) {
     try {
         return fn();
     } catch (e) {
-        return defaultValue;
+        return fallback;
     }
 }
 
-// --- 1. CATALOG & SEARCH ---
-builder.defineCatalogHandler(async ({ type, id, extra }) => {
-    let url = "";
-    console.log("Request Catalog:", id, extra); // Log để debug trên Render
+// Hàm chuẩn hóa ID
+function parseId(id) {
+    const parts = id.split(":");
+    return {
+        prefix: parts[0],
+        slug: parts[1],
+        episodeSlug: parts[2] // Có thể null nếu là movie
+    };
+}
 
+// --- 1. CATALOG HANDLER ---
+builder.defineCatalogHandler(async ({ type, id, extra }) => {
+    let url = `${API_BASE}/films/phim-moi-cap-nhat?page=1`;
     if (extra && extra.search) {
         url = `${API_BASE}/films/search?keyword=${encodeURIComponent(extra.search)}`;
-    } else if (id === "nguonc_phimmoi") {
-        url = `${API_BASE}/films/phim-moi-cap-nhat?page=1`;
-    } else {
-        return { metas: [] };
     }
 
     try {
         const response = await axios.get(url);
         const items = response.data.items || [];
         
-        const metas = items.map(item => ({
-            id: `nguonc:${item.slug}`,
-            type: "movie",
-            name: item.name,
-            poster: item.thumb_url,
-            description: `Năm: ${item.year} - ${item.original_name || ''}`
-        }));
-        
-        return { metas };
-    } catch (error) {
-        console.error("Lỗi Catalog:", error.message);
+        return {
+            metas: items.map(item => ({
+                id: `nguonc:${item.slug}`,
+                type: "movie", // Catalog luôn để movie để hiện chung
+                name: item.name,
+                poster: item.thumb_url,
+                description: `Năm: ${item.year}`
+            }))
+        };
+    } catch (e) {
+        console.error("Lỗi Catalog:", e.message);
         return { metas: [] };
     }
 });
 
-// --- 2. META HANDLER (Chi tiết phim) ---
+// --- 2. META HANDLER (Quan trọng: Xử lý hiển thị tập) ---
 builder.defineMetaHandler(async ({ type, id }) => {
-    console.log("Request Meta:", id); // Log để xem đang request phim gì
     if (!id.startsWith("nguonc:")) return { meta: {} };
-    
-    const slug = id.split(":")[1];
+    const { slug } = parseId(id);
 
     try {
-        const url = `${API_BASE}/film/${slug}`;
-        const response = await axios.get(url);
+        const response = await axios.get(`${API_BASE}/film/${slug}`);
         const movie = response.data.movie;
+        if (!movie) throw new Error("No movie data");
 
-        if (!movie) throw new Error("Không tìm thấy data movie");
-
-        // Logic xác định loại phim (Series hay Movie)
-        // Nếu có nhiều tập hoặc thuộc danh mục Phim Bộ -> Series
-        const isSeries = movie.total_episodes > 1 || 
-                         (movie.category && JSON.stringify(movie.category).includes("Phim Bộ"));
+        // 1. Lấy danh sách tập an toàn
+        const episodes = safeGet(() => movie.episodes[0].server_data, []);
+        
+        // 2. Xác định là Series hay Movie
+        // Nếu có nhiều hơn 1 tập HOẶC danh mục chứa "Phim Bộ" -> Series
+        const isSeries = episodes.length > 1 || 
+                         JSON.stringify(movie.category || {}).includes("Phim Bộ");
         
         const stremioType = isSeries ? "series" : "movie";
-
-        // Xử lý Category an toàn hơn (Tránh lỗi crash nếu API đổi format)
-        let genres = [];
-        if (Array.isArray(movie.category)) {
-            genres = movie.category.map(c => c.name);
-        } else if (typeof movie.category === 'object') {
-            // Trường hợp API trả về object lồng nhau
-            genres = Object.values(movie.category).flatMap(c => c.list ? c.list.map(i => i.name) : []);
-        }
 
         const metaObj = {
             id: id,
@@ -99,91 +94,97 @@ builder.defineMetaHandler(async ({ type, id }) => {
             name: movie.name,
             poster: movie.thumb_url,
             background: movie.poster_url || movie.thumb_url,
-            description: movie.content || "Không có mô tả.",
-            releaseInfo: safeGet(() => movie.year.toString(), ""),
+            description: movie.content,
+            releaseInfo: `${movie.year}`,
             language: movie.lang,
-            genres: genres,
-            country: safeGet(() => movie.country[0].name, "")
+            genres: safeGet(() => movie.category.map(c => c.name), []),
         };
 
-        // Xử lý danh sách tập (Videos) cho Phim Bộ
-        if (movie.episodes && movie.episodes.length > 0) {
-            const serverData = movie.episodes[0].server_data;
-            if (serverData) {
-                metaObj.videos = serverData.map((ep, index) => ({
-                    id: `${id}:${ep.slug}`, // ID tập phim
-                    title: ep.name,
-                    season: 1,
-                    episode: index + 1,
-                    released: new Date().toISOString()
-                }));
-            }
+        // 3. Nếu là Series, BẮT BUỘC phải trả về mảng 'videos'
+        if (episodes.length > 0) {
+            metaObj.videos = episodes.map((ep, index) => ({
+                id: `nguonc:${slug}:${ep.slug}`, // ID duy nhất cho từng tập
+                title: ep.name,
+                season: 1, // Gom hết vào season 1
+                episode: index + 1,
+                released: new Date().toISOString()
+            }));
+        } else {
+             // Trường hợp phim lẻ, tạo 1 video ảo để Stremio hiểu
+             metaObj.videos = [{
+                id: `nguonc:${slug}:full`,
+                title: "Full Movie",
+                season: 1,
+                episode: 1,
+             }];
         }
 
         return { meta: metaObj };
 
-    } catch (error) {
-        console.error(`Lỗi Meta [${id}]:`, error.message);
-        // Trả về meta cơ bản để không bị lỗi màn hình đen
-        return { 
-            meta: { 
-                id: id, 
-                type: "movie", 
-                name: "Lỗi tải dữ liệu: " + slug, 
-                description: "Không thể lấy chi tiết phim này từ NguonC." 
-            } 
-        };
+    } catch (e) {
+        console.error("Lỗi Meta:", e.message);
+        return { meta: { id, type: "movie", name: "Lỗi tải thông tin" } };
     }
 });
 
-// --- 3. STREAM HANDLER (Lấy link phim) ---
+// --- 3. STREAM HANDLER (Fix lỗi crash) ---
 builder.defineStreamHandler(async ({ type, id }) => {
-    console.log("Request Stream:", id);
     if (!id.startsWith("nguonc:")) return { streams: [] };
+    const { slug, episodeSlug } = parseId(id);
 
-    const parts = id.split(":");
-    const filmSlug = parts[1];
-    const episodeSlug = parts[2];
+    console.log(`Getting stream for: ${slug} - Ep: ${episodeSlug}`);
 
     try {
-        const response = await axios.get(`${API_BASE}/film/${filmSlug}`);
+        const response = await axios.get(`${API_BASE}/film/${slug}`);
         const movie = response.data.movie;
         
-        // Tìm tập phim phù hợp
-        let targetEpisode;
-        const serverData = safeGet(() => movie.episodes[0].server_data, []);
+        // Lấy danh sách tập một cách an toàn nhất
+        const episodesList = (movie.episodes && movie.episodes[0]) 
+                           ? movie.episodes[0].server_data 
+                           : [];
 
-        if (episodeSlug) {
-            // Nếu chọn tập cụ thể
-            targetEpisode = serverData.find(ep => ep.slug === episodeSlug);
-        } else {
-            // Nếu bấm play từ ngoài (phim lẻ) -> Lấy tập 1
-            targetEpisode = serverData[0];
+        if (episodesList.length === 0) {
+            console.log("Phim chưa có tập nào.");
+            return { streams: [] };
+        }
+
+        let targetEpisode;
+
+        // Logic tìm tập phim
+        if (episodeSlug && episodeSlug !== "full") {
+            // Tìm theo slug tập (ví dụ: tap-1, tap-2)
+            targetEpisode = episodesList.find(ep => ep.slug == episodeSlug);
+        } 
+        
+        // Fallback: Nếu không tìm thấy hoặc không có slug (play movie), lấy tập đầu tiên
+        if (!targetEpisode) {
+            targetEpisode = episodesList[0];
         }
 
         if (!targetEpisode) return { streams: [] };
 
         const streamUrl = targetEpisode.link_m3u8 || targetEpisode.link_embed;
+        console.log("Found Stream:", streamUrl);
 
         return {
             streams: [
                 {
-                    title: `NguonC - ${targetEpisode.name} - ${movie.quality || 'HD'}`,
+                    title: `NguonC ⚡ ${movie.quality} - ${targetEpisode.name}`,
                     url: streamUrl,
                     behaviorHints: {
                         notWebReady: false,
-                        bingeGroup: `nguonc-${filmSlug}`
+                        bingeGroup: `nguonc-${slug}` // Tự động chuyển tập
                     }
                 }
             ]
         };
 
-    } catch (error) {
-        console.error(`Lỗi Stream [${id}]:`, error.message);
+    } catch (e) {
+        console.error("Lỗi Stream:", e.message);
         return { streams: [] };
     }
 });
 
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port: port });
-console.log(`Addon đang chạy tại port: ${port}`);
+console.log(`Addon running on port ${port}`);
