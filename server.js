@@ -16,25 +16,22 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v15",
-    version: "15.0.0",
-    name: "Phim4K VIP (Dict Pro)",
-    description: "Fix From, Bet, Ghibli & Strict Matching",
+    id: "com.phim4k.vip.final.v16",
+    version: "16.0.0",
+    name: "Phim4K VIP (Split Search)",
+    description: "Fix From, Bet, Money Heist issue",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN ÁNH XẠ (COMBO VIỆT + ANH) ===
-// Bí quyết: Kết hợp tên Việt + Tên Anh để tạo từ khóa không thể nhầm lẫn
-const TITLE_MAPPING = {
-    // Phim series ngắn
-    "from": "bẫy from",  // Tìm chính xác cụm này, "Bây giờ..." sẽ bị loại ngay
-    "bet": "học viện đỏ đen bet", // Tìm chính xác cụm này
-
-    // Anime / Ghibli
-    "the wind rises": "gió vẫn thổi", // Đã fix theo bạn báo
+// === 1. TỪ ĐIỂN ÁNH XẠ (CHỈ LẤY KEYWORD TIẾNG VIỆT) ===
+// Không gộp tên Anh vào đây nữa, để tránh lỗi do Server không tìm được cụm từ dài
+const VIETNAMESE_MAPPING = {
+    "from": "bẫy",  
+    "bet": "học viện đỏ đen",
+    "the wind rises": "gió vẫn thổi",
     "the boy and the heron": "thiếu niên và chim diệc",
     "howl's moving castle": "lâu đài bay của pháp sư howl",
     "spirited away": "vùng đất linh hồn",
@@ -56,31 +53,30 @@ function normalizeTitle(title) {
         .trim();
 }
 
-// === 2. TẠO TỪ KHÓA ===
+// === 2. TẠO TỪ KHÓA (TÁCH BIỆT) ===
 function getSearchQueries(originalName) {
     const clean = normalizeTitle(originalName);
     const queries = [];
 
-    // Ưu tiên 1: Từ điển (MAPPING)
+    // Ưu tiên 1: Chỉ search tên Tiếng Việt (Hiệu quả nhất)
     const lowerOriginal = originalName.toLowerCase();
-    if (TITLE_MAPPING[lowerOriginal]) {
-        queries.push(TITLE_MAPPING[lowerOriginal]);
+    if (VIETNAMESE_MAPPING[lowerOriginal]) {
+        queries.push(VIETNAMESE_MAPPING[lowerOriginal]);
     }
 
     // Ưu tiên 2: Tên gốc
     queries.push(originalName);
 
-    // Ưu tiên 3: Tên sạch (chỉ thêm nếu khác tên gốc)
+    // Ưu tiên 3: Tên sạch
     if (clean !== lowerOriginal) queries.push(clean);
 
-    // Xử lý hậu tố "The Movie"
+    // Hậu tố The Movie
     const removeTheMovie = clean.replace(/\s+the movie$/, "").trim();
     if (removeTheMovie !== clean) queries.push(removeTheMovie);
 
-    // Xử lý dấu hai chấm (Dexter)
+    // Dexter
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
-        // Chỉ thêm nếu tên tách ra đủ dài hoặc là F1
         if (splitName.length > 3 || splitName.toLowerCase() === 'f1') {
             queries.push(splitName);
         }
@@ -126,8 +122,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const hasYear = !isNaN(year); 
 
     const searchQueries = getSearchQueries(originalName);
-    // Kiểm tra xem phim này có trong từ điển không
-    const mappedTitle = TITLE_MAPPING[originalName.toLowerCase()]; 
+    // Lấy tên tiếng Việt chuẩn để đối chiếu
+    const mappedVietnamese = VIETNAMESE_MAPPING[originalName.toLowerCase()]; 
 
     console.log(`\n=== Xử lý: "${originalName}" (${year}) | Type: ${type} ===`);
     console.log(`-> Queries: ${JSON.stringify(searchQueries)}`);
@@ -149,55 +145,56 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
                     const serverNameClean = normalizeTitle(m.name);
                     const qClean = normalizeTitle(query);
+                    const vietnameseClean = mappedVietnamese ? normalizeTitle(mappedVietnamese) : null;
 
-                    // LOGIC 1: CHECK TÊN
-                    let nameMatch = false;
+                    // LOGIC CHECK TÊN (LUẬT THÉP)
                     
-                    // A. NẾU LÀ TỪ KHÓA TỪ ĐIỂN (ĐỘ TIN CẬY CAO)
-                    // Nếu query hiện tại chính là từ khóa ta lấy từ Dictionary (ví dụ "bẫy from")
-                    // Ta bắt buộc server name phải chứa cụm từ này.
-                    if (mappedTitle && normalizeTitle(mappedTitle) === qClean) {
-                        nameMatch = serverNameClean.includes(qClean); 
-                        // "bẫy (2022) from" -> clean: "bay 2022 from" -> CHỨA "bay from" -> TRUE
-                        // "bây giờ..." -> clean: "bay gio..." -> KHÔNG CHỨA "bay from" -> FALSE
-                    }
-                    // B. NẾU TỪ KHÓA NGẮN (< 4 ký tự) VÀ KHÔNG PHẢI TỪ ĐIỂN
-                    else if (qClean.length < 4) {
-                         // Phải bắt đầu bằng từ đó (Strict Start)
-                         nameMatch = new RegExp(`^${qClean}(\\s|\\W|$)`, 'i').test(serverNameClean);
-                    } 
-                    // C. BÌNH THƯỜNG
-                    else {
-                        nameMatch = serverNameClean.includes(qClean) || qClean.includes(serverNameClean);
+                    // Trường hợp 1: Nếu tên server chứa Tên Tiếng Việt trong từ điển -> CHỐT LUÔN
+                    // Ví dụ: Query "bẫy" -> Server "Bẫy (2022) From" -> Chứa "bẫy" -> OK
+                    // Ví dụ: Query "From" -> Server "Bẫy (2022) From" -> Chứa "bẫy" -> OK
+                    if (vietnameseClean && serverNameClean.includes(vietnameseClean)) {
+                        return true;
                     }
 
-                    // FIX DEXTER (Subtitle Conflict)
+                    // Trường hợp 2: Nếu từ khóa tìm kiếm quá ngắn (< 4 ký tự) (Ví dụ: "From", "Bet")
+                    // Bắt buộc tên Server phải BẮT ĐẦU bằng từ đó.
+                    if (qClean.length < 4) {
+                        // Regex: Bắt đầu bằng tên phim + (kết thúc hoặc ký tự ngăn cách)
+                        // "From" -> OK "From (2022)"
+                        // "From" -> REJECT "Money Heist: From..." (Vì bắt đầu bằng Money)
+                        const strictStartRegex = new RegExp(`^${qClean}(\\s|\\W|$)`, 'i');
+                        if (strictStartRegex.test(serverNameClean)) {
+                            return true;
+                        }
+                        // Nếu không bắt đầu bằng From, và cũng không chứa tên Việt -> CÚT
+                        return false; 
+                    }
+
+                    // Trường hợp 3: Tên dài bình thường
+                    // Fix Dexter: Kiểm tra hậu tố
                     if (originalName.includes(":") && qClean.length < cleanOriginalName.length) {
                          const originalSuffix = cleanOriginalName.replace(qClean, "").trim();
                          if (originalSuffix.length > 3 && !serverNameClean.includes(originalSuffix)) {
-                             // Siết chặt năm nếu tên không khớp hoàn toàn
+                             // Nếu tên không chứa hậu tố, check năm thật chặt
                              if (Math.abs(parseInt(m.releaseInfo || "0") - year) > 1) return false;
                          }
                     }
 
-                    // LOGIC 2: CHECK NĂM
-                    let yearMatch = false;
-                    if (!hasYear) {
-                        yearMatch = true;
-                    } else {
-                        const yearMatches = m.name.match(/\d{4}/g);
-                        if (yearMatches) {
-                            yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 2);
-                        } else if (m.releaseInfo) {
-                            yearMatch = m.releaseInfo.includes(year.toString()) 
-                                     || m.releaseInfo.includes((year-1).toString()) 
-                                     || m.releaseInfo.includes((year+1).toString());
-                        } else {
-                            yearMatch = true; 
+                    // Check Match cơ bản
+                    if (serverNameClean.includes(qClean) || qClean.includes(serverNameClean)) {
+                        // Check Năm
+                        let yearMatch = false;
+                        if (!hasYear) yearMatch = true;
+                        else {
+                            const yearMatches = m.name.match(/\d{4}/g);
+                            if (yearMatches) yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 2);
+                            else if (m.releaseInfo) yearMatch = true; 
+                            else yearMatch = true;
                         }
+                        return yearMatch;
                     }
-                    
-                    return nameMatch && yearMatch;
+
+                    return false;
                 });
             }
         } catch (e) {}
