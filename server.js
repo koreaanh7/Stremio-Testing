@@ -18,20 +18,23 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v15",
     version: "15.0.0",
-    name: "Phim4K VIP (Token Match)",
-    description: "Fix From, Bet, Short Names using Token Logic",
+    name: "Phim4K VIP (Dict Pro)",
+    description: "Fix From, Bet, Ghibli & Strict Matching",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN ÁNH XẠ KÉP (QUAN TRỌNG) ===
-// Mẹo: Kết hợp cả Tiếng Việt + Tiếng Anh vào value để tìm chính xác
+// === 1. TỪ ĐIỂN ÁNH XẠ (COMBO VIỆT + ANH) ===
+// Bí quyết: Kết hợp tên Việt + Tên Anh để tạo từ khóa không thể nhầm lẫn
 const TITLE_MAPPING = {
-    "from": "bẫy from",  // Fix: Bẫy (2022) From
-    "bet": "học viện đỏ đen bet", // Fix: Học viện đỏ đen (2025) Bet
-    "the wind rises": "gió vẫn thổi",
+    // Phim series ngắn
+    "from": "bẫy from",  // Tìm chính xác cụm này, "Bây giờ..." sẽ bị loại ngay
+    "bet": "học viện đỏ đen bet", // Tìm chính xác cụm này
+
+    // Anime / Ghibli
+    "the wind rises": "gió vẫn thổi", // Đã fix theo bạn báo
     "the boy and the heron": "thiếu niên và chim diệc",
     "howl's moving castle": "lâu đài bay của pháp sư howl",
     "spirited away": "vùng đất linh hồn",
@@ -58,7 +61,7 @@ function getSearchQueries(originalName) {
     const clean = normalizeTitle(originalName);
     const queries = [];
 
-    // Ưu tiên 1: Từ điển
+    // Ưu tiên 1: Từ điển (MAPPING)
     const lowerOriginal = originalName.toLowerCase();
     if (TITLE_MAPPING[lowerOriginal]) {
         queries.push(TITLE_MAPPING[lowerOriginal]);
@@ -67,16 +70,17 @@ function getSearchQueries(originalName) {
     // Ưu tiên 2: Tên gốc
     queries.push(originalName);
 
-    // Ưu tiên 3: Tên sạch
+    // Ưu tiên 3: Tên sạch (chỉ thêm nếu khác tên gốc)
     if (clean !== lowerOriginal) queries.push(clean);
 
-    // Xử lý hậu tố
+    // Xử lý hậu tố "The Movie"
     const removeTheMovie = clean.replace(/\s+the movie$/, "").trim();
     if (removeTheMovie !== clean) queries.push(removeTheMovie);
 
-    // Xử lý dấu hai chấm (Dexter, F1)
+    // Xử lý dấu hai chấm (Dexter)
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
+        // Chỉ thêm nếu tên tách ra đủ dài hoặc là F1
         if (splitName.length > 3 || splitName.toLowerCase() === 'f1') {
             queries.push(splitName);
         }
@@ -86,15 +90,6 @@ function getSearchQueries(originalName) {
     if (noSpace !== clean) queries.push(noSpace);
 
     return [...new Set(queries)];
-}
-
-// === 3. HÀM CHECK KHỚP TỪNG TỪ (TOKEN MATCH) ===
-// Giúp tìm "Bẫy From" khớp với "Bẫy (2022) From"
-function isTokenMatch(query, targetName) {
-    const qTokens = normalizeTitle(query).split(" ");
-    const tClean = normalizeTitle(targetName);
-    // Tất cả các từ trong query phải xuất hiện trong targetName
-    return qTokens.every(token => tClean.includes(token));
 }
 
 async function getCinemetaMetadata(type, imdbId) {
@@ -131,9 +126,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const hasYear = !isNaN(year); 
 
     const searchQueries = getSearchQueries(originalName);
-    
-    // Check xem có dùng Mapping không
-    const mappedTitle = TITLE_MAPPING[originalName.toLowerCase()];
+    // Kiểm tra xem phim này có trong từ điển không
+    const mappedTitle = TITLE_MAPPING[originalName.toLowerCase()]; 
 
     console.log(`\n=== Xử lý: "${originalName}" (${year}) | Type: ${type} ===`);
     console.log(`-> Queries: ${JSON.stringify(searchQueries)}`);
@@ -156,36 +150,37 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     const serverNameClean = normalizeTitle(m.name);
                     const qClean = normalizeTitle(query);
 
-                    // --- LOGIC SO KHỚP TÊN ---
+                    // LOGIC 1: CHECK TÊN
                     let nameMatch = false;
-
-                    // A. Nếu query này đến từ MAPPING (Ví dụ: "bẫy from")
-                    if (mappedTitle && query === mappedTitle) {
-                        // Dùng thuật toán Token Match: "bẫy from" khớp "bẫy (2022) from"
-                        nameMatch = isTokenMatch(query, m.name);
+                    
+                    // A. NẾU LÀ TỪ KHÓA TỪ ĐIỂN (ĐỘ TIN CẬY CAO)
+                    // Nếu query hiện tại chính là từ khóa ta lấy từ Dictionary (ví dụ "bẫy from")
+                    // Ta bắt buộc server name phải chứa cụm từ này.
+                    if (mappedTitle && normalizeTitle(mappedTitle) === qClean) {
+                        nameMatch = serverNameClean.includes(qClean); 
+                        // "bẫy (2022) from" -> clean: "bay 2022 from" -> CHỨA "bay from" -> TRUE
+                        // "bây giờ..." -> clean: "bay gio..." -> KHÔNG CHỨA "bay from" -> FALSE
                     }
-                    // B. Nếu query quá ngắn (<4 ký tự) như "Bet", "F1"
+                    // B. NẾU TỪ KHÓA NGẮN (< 4 ký tự) VÀ KHÔNG PHẢI TỪ ĐIỂN
                     else if (qClean.length < 4) {
-                        // Phải bắt đầu chính xác hoặc bằng nhau
-                        const strictStart = new RegExp(`^${qClean}(\\s|\\W|$)`, 'i').test(serverNameClean);
-                        nameMatch = strictStart;
-                    }
-                    // C. Bình thường
+                         // Phải bắt đầu bằng từ đó (Strict Start)
+                         nameMatch = new RegExp(`^${qClean}(\\s|\\W|$)`, 'i').test(serverNameClean);
+                    } 
+                    // C. BÌNH THƯỜNG
                     else {
                         nameMatch = serverNameClean.includes(qClean) || qClean.includes(serverNameClean);
                     }
 
-                    // --- LOGIC DEXTER FIX (Subtitle Conflict) ---
+                    // FIX DEXTER (Subtitle Conflict)
                     if (originalName.includes(":") && qClean.length < cleanOriginalName.length) {
                          const originalSuffix = cleanOriginalName.replace(qClean, "").trim();
-                         // Nếu hậu tố đủ dài và server name KHÔNG chứa hậu tố đó -> Check kỹ năm
                          if (originalSuffix.length > 3 && !serverNameClean.includes(originalSuffix)) {
-                             // Nếu sai số năm > 1 thì bỏ qua luôn (Tránh Original Sin lấy nhầm Resurrection)
+                             // Siết chặt năm nếu tên không khớp hoàn toàn
                              if (Math.abs(parseInt(m.releaseInfo || "0") - year) > 1) return false;
                          }
                     }
 
-                    // --- LOGIC SO KHỚP NĂM ---
+                    // LOGIC 2: CHECK NĂM
                     let yearMatch = false;
                     if (!hasYear) {
                         yearMatch = true;
