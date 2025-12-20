@@ -16,17 +16,17 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v18",
-    version: "18.0.0",
-    name: "Phim4K VIP (F1 Fixed)",
-    description: "Fix F1 short name, Accent Check & Year Enforce",
+    id: "com.phim4k.vip.final.v19",
+    version: "19.0.0",
+    name: "Phim4K VIP (Strict Veto)",
+    description: "Fix From/Bet/F1 with Veto Logic",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN (GIỮ NGUYÊN DẤU TIẾNG VIỆT) ===
+// === 1. TỪ ĐIỂN ===
 const VIETNAMESE_MAPPING = {
     "from": "bẫy",  
     "bet": "học viện đỏ đen", 
@@ -44,7 +44,6 @@ const VIETNAMESE_MAPPING = {
     "5 centimeters per second": "5 centimet trên giây"
 };
 
-// Hàm chuẩn hóa cơ bản 
 function normalizeForSearch(title) {
     return title.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, "") 
@@ -53,7 +52,6 @@ function normalizeForSearch(title) {
         .trim();
 }
 
-// Hàm so sánh chuỗi CÓ DẤU 
 function containsWithAccent(fullString, subString) {
     return fullString.toLowerCase().includes(subString.toLowerCase());
 }
@@ -90,36 +88,26 @@ builder.defineStreamHandler(async ({ type, id }) => {
     let year = parseInt(meta.year);
     const hasYear = !isNaN(year); 
 
-    // === TẠO DANH SÁCH TỪ KHÓA ===
+    // === TẠO QUERY (Có fix F1) ===
     const queries = [];
     const lowerName = originalName.toLowerCase();
     const mappedVietnamese = VIETNAMESE_MAPPING[lowerName];
 
-    // 1. Tên tiếng Việt (nếu có)
-    if (mappedVietnamese) {
-        queries.push(mappedVietnamese); 
-    }
-    
-    // 2. Tên gốc
+    if (mappedVietnamese) queries.push(mappedVietnamese); 
     queries.push(originalName);
 
-    // 3. Tên sạch
     const cleanName = normalizeForSearch(originalName);
     if (cleanName !== lowerName) queries.push(cleanName);
 
-    // 4. Fix Dexter & F1 (Xử lý dấu hai chấm)
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
         const splitClean = normalizeForSearch(splitName);
-        
-        // SỬA LỖI Ở ĐÂY: Cho phép độ dài > 3 HOẶC tên là "f1"
+        // Fix F1: Chấp nhận tên ngắn nếu là f1
         if (splitClean.length > 3 || splitClean === 'f1') {
             queries.push(splitName);
         }
     }
 
-    // 5. Fix hậu tố "The Movie" (cho chắc ăn)
-    // F1: The Movie -> Xóa "the movie" -> còn "F1"
     const removeTheMovie = cleanName.replace(/\s+the movie$/, "").trim();
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) {
         queries.push(removeTheMovie);
@@ -139,7 +127,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
     );
 
     const responses = await Promise.all(searchPromises);
-
     let allCandidates = [];
     responses.forEach(res => {
         if (res && res.data && res.data.metas) {
@@ -147,57 +134,63 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
     });
 
-    // Lọc trùng ID
+    // Lọc trùng
     allCandidates = allCandidates.filter((v,i,a)=>a.findIndex(t=>(t.id === v.id))===i);
 
-    // === VERIFY MATCH ===
+    // === VERIFY LOGIC (VETO PROTOCOL) ===
     match = allCandidates.find(m => {
         if (m.type && m.type !== type) return false;
         const serverName = m.name; 
+        const serverClean = normalizeForSearch(serverName);
         
-        // BƯỚC 1: KIỂM TRA NĂM (BẮT BUỘC)
+        // 1. KIỂM TRA NĂM (BẮT BUỘC)
         let yearMatch = false;
-        if (!hasYear) {
-            yearMatch = true;
-        } else {
+        if (!hasYear) yearMatch = true;
+        else {
             const yearMatches = serverName.match(/\d{4}/g);
-            if (yearMatches) {
-                // F1 (2025) - Sai số 1 năm
-                yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 1);
-            } else if (m.releaseInfo) {
-                yearMatch = m.releaseInfo.includes(year.toString()) 
-                         || m.releaseInfo.includes((year-1).toString()) 
-                         || m.releaseInfo.includes((year+1).toString());
-            } else {
-                yearMatch = true; 
-            }
+            if (yearMatches) yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 1);
+            else if (m.releaseInfo) yearMatch = m.releaseInfo.includes(year.toString()) || m.releaseInfo.includes((year-1).toString()) || m.releaseInfo.includes((year+1).toString());
+            else yearMatch = true; 
         }
         if (!yearMatch) return false;
 
-        // BƯỚC 2: KIỂM TRA TÊN
-        
-        // A. Ưu tiên Mapping Tiếng Việt (CÓ DẤU)
-        if (mappedVietnamese && containsWithAccent(serverName, mappedVietnamese)) {
-            return true;
+        // 2. LOGIC TÊN TIẾNG VIỆT (QUYỀN PHỦ QUYẾT)
+        // Nếu phim có Mapping Tiếng Việt
+        if (mappedVietnamese) {
+            const mappedClean = normalizeForSearch(mappedVietnamese);
+            
+            // Nếu tên Server CÓ CHỨA từ khóa tiếng Việt (dù có dấu hay không)
+            // Ví dụ: server "Bây giờ" (clean: bay gio), mapping "bẫy" (clean: bay)
+            // -> Điều kiện này True
+            if (serverClean.includes(mappedClean)) {
+                
+                // THÌ BẮT BUỘC PHẢI KHỚP DẤU
+                // "Bây giờ" KHÔNG chứa "bẫy" -> False -> RETURN FALSE NGAY (Không check tiếp logic dưới)
+                if (!containsWithAccent(serverName, mappedVietnamese)) {
+                    return false; // CHẶN ĐỨNG SAI SÓT
+                }
+                
+                // Nếu khớp dấu -> LẤY LUÔN
+                return true;
+            }
+            // Nếu server hoàn toàn không chứa từ khóa Việt (ví dụ tên server là "From (2022)"),
+            // thì bỏ qua block này, chạy tiếp xuống logic tiếng Anh.
         }
 
-        // B. Logic Tiếng Anh
+        // 3. LOGIC TIẾNG ANH / TÊN NGẮN
         const qClean = normalizeForSearch(originalName);
-        const serverClean = normalizeForSearch(serverName);
-
-        // Nếu từ khóa ngắn (F1, Bet, From)
-        // Tìm bất kỳ từ khóa nào trong list queries mà ngắn < 4 ký tự và khớp logic strict
+        
+        // Logic cho từ khóa ngắn (F1, Bet, From)
         for (const query of uniqueQueries) {
             const qShort = normalizeForSearch(query);
             if (qShort.length < 4) {
-                 // Logic Strict Start: Tên server phải bắt đầu bằng từ khóa đó
-                 // Regex: (^|\s|\(|\-)f1(\s|\)|\:|$)
+                 // Phải bắt đầu bằng từ khóa đó
                  const regex = new RegExp(`(^|\\s|\\(|\\-)${qShort}(\\s|\\)|\\:|$)`, 'i');
                  if (regex.test(serverClean)) return true;
             }
         }
 
-        // Match thường cho tên dài
+        // Logic match thường cho tên dài
         return serverClean.includes(qClean) || qClean.includes(serverClean);
     });
 
