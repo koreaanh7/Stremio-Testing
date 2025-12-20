@@ -16,17 +16,30 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v12",
-    version: "12.0.0",
-    name: "Phim4K VIP (Master Fix)",
-    description: "Fix F1, The Movie suffix, Short names",
+    id: "com.phim4k.vip.final.v13",
+    version: "13.0.0",
+    name: "Phim4K VIP (Vietnamese & Strict Fix)",
+    description: "Fix From, Lost, Dexter, Dark, Howl's Moving Castle",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. CHUẨN HÓA CƠ BẢN ===
+// === 1. TỪ ĐIỂN TAY (MAPPING) ===
+// Giúp tìm những phim server chỉ lưu tên Việt hoặc tên khác lạ
+const TITLE_MAPPING = {
+    "dark": ["đêm lặng", "dark"],
+    "howl's moving castle": ["lâu đài bay của howl", "howl's moving castle"],
+    "spirited away": ["vùng đất linh hồn"],
+    "from": ["from", "nguồn gốc"], // From thường giữ nguyên hoặc dịch Nguồn Gốc
+    "lost": ["lost", "mất tích"],
+    "soul": ["cuộc sống nhiệm màu", "soul"],
+    "up": ["vút bay", "up"],
+    "f1": ["f1"] // Ép buộc tìm F1 ngắn gọn
+};
+
+// === 2. CHUẨN HÓA TÊN ===
 function normalizeTitle(title) {
     return title.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, "")
@@ -35,32 +48,56 @@ function normalizeTitle(title) {
         .trim();
 }
 
-// === 2. TẠO TỪ KHÓA THÔNG MINH (UPDATED) ===
+// === 3. TẠO TỪ KHÓA TÌM KIẾM (UPDATED) ===
 function getSearchQueries(originalName) {
     const clean = normalizeTitle(originalName);
     const queries = [originalName]; 
 
-    // Query 1: Tên sạch
-    if (clean !== originalName.toLowerCase()) queries.push(clean);
+    // A. Check từ điển trước
+    const lowerName = originalName.toLowerCase();
+    if (TITLE_MAPPING[lowerName]) {
+        return TITLE_MAPPING[lowerName]; // Nếu có trong từ điển, dùng ngay list này
+    }
 
-    // Query 2: Bỏ hậu tố "The Movie" (Quan trọng cho F1)
-    // Ví dụ: "F1: The Movie" -> "F1"
+    // B. Logic tự động
+    if (clean !== lowerName) queries.push(clean);
+
+    // Bỏ hậu tố "The Movie"
     const removeTheMovie = clean.replace(/\s+the movie$/, "").trim();
     if (removeTheMovie !== clean) queries.push(removeTheMovie);
 
-    // Query 3: Cắt bỏ phần sau dấu hai chấm (Nếu chưa có)
+    // Cắt dấu hai chấm (Dexter: Original Sin -> Dexter Original Sin)
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
-        queries.push(splitName); // F1
-        queries.push(normalizeTitle(splitName)); // f1
+        queries.push(splitName); 
     }
 
-    // Query 4: Dính liền (cho 10Dance)
+    // Dính liền (10Dance)
     const noSpace = clean.replace(/\s/g, "");
     if (noSpace !== clean) queries.push(noSpace);
 
-    // Lọc trùng và loại bỏ từ khóa quá ngắn (trừ khi tên gốc ngắn)
     return [...new Set(queries)].filter(q => q.length >= 2 || originalName.length <= 2);
+}
+
+// === 4. THUẬT TOÁN TÍNH ĐIỂM KHỚP (STRICT MATCHING) ===
+// Khắc phục vụ Dexter Original Sin nhận nhầm Dexter Resurrection
+function calculateMatchScore(queryClean, serverNameClean) {
+    // Tách từ: "dexter original sin" -> ["dexter", "original", "sin"]
+    const queryWords = queryClean.split(" ");
+    const serverWords = serverNameClean.split(" ");
+
+    let matches = 0;
+    queryWords.forEach(w => {
+        if (serverWords.includes(w)) matches++;
+    });
+
+    // Nếu tên query ngắn (1 từ) -> Phải khớp chính xác hoàn toàn
+    if (queryWords.length === 1) {
+        return (queryClean === serverNameClean || serverNameClean === queryClean) ? 100 : 0;
+    }
+
+    // Tính % số từ khớp
+    return (matches / queryWords.length) * 100;
 }
 
 async function getCinemetaMetadata(type, imdbId) {
@@ -93,19 +130,17 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const originalName = meta.name;
     const cleanName = normalizeTitle(originalName);
-    
-    // Xử lý năm (NaN proof)
     let year = parseInt(meta.year);
     const hasYear = !isNaN(year); 
 
     const searchQueries = getSearchQueries(originalName);
-    console.log(`\n=== Xử lý: "${originalName}" (${hasYear ? year : 'No Year'}) ===`);
-    console.log(`-> Thử các từ khóa: ${JSON.stringify(searchQueries)}`);
+    console.log(`\n=== Xử lý: "${originalName}" (${hasYear ? year : 'NaN'}) ===`);
+    console.log(`-> Keywords: ${JSON.stringify(searchQueries)}`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     let match = null;
 
-    // === VÒNG LẶP TÌM KIẾM (FALLBACK) ===
+    // === VÒNG LẶP TÌM KIẾM ===
     for (const query of searchQueries) {
         if (match) break; 
 
@@ -115,58 +150,55 @@ builder.defineStreamHandler(async ({ type, id }) => {
             
             if (res.data && res.data.metas && res.data.metas.length > 0) {
                 
-                // Logic so sánh (Tối ưu cho tên ngắn như F1)
+                // === BỘ LỌC THÔNG MINH (NÂNG CẤP) ===
                 match = res.data.metas.find(m => {
                     const serverNameClean = normalizeTitle(m.name);
                     const qClean = normalizeTitle(query);
 
-                    // 1. So sánh Tên
-                    let nameMatch = false;
-                    // Nếu tên quá ngắn (<=3 ký tự) -> Bắt buộc phải khớp chính xác hoặc bắt đầu bằng
-                    if (qClean.length <= 3) {
-                         nameMatch = serverNameClean === qClean || serverNameClean.startsWith(qClean + " ");
-                    } else {
-                        // Tên dài thì dùng includes như cũ
-                        nameMatch = serverNameClean.includes(qClean) || qClean.includes(serverNameClean) || serverNameClean.replace(/\s/g, "") === qClean.replace(/\s/g, "");
+                    // 1. Check Năm
+                    let yearMatch = false;
+                    if (!hasYear) yearMatch = true;
+                    else {
+                        const yearMatches = m.name.match(/\d{4}/g);
+                        if (yearMatches) yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 2);
+                        else if (m.releaseInfo) yearMatch = m.releaseInfo.includes(year.toString());
+                        else yearMatch = true; 
+                    }
+                    if (!yearMatch) return false;
+
+                    // 2. Check Tên (Dùng Score)
+                    // Nếu dùng Từ điển Mapping (Dark -> Đêm lặng) -> Chấp nhận luôn nếu chuỗi khớp
+                    if (TITLE_MAPPING[originalName.toLowerCase()]) {
+                        if (serverNameClean.includes(qClean)) return true;
                     }
 
-                    // 2. So sánh Năm
-                    let yearMatch = false;
-                    if (!hasYear) {
-                        yearMatch = true;
-                    } else {
-                        const yearMatches = m.name.match(/\d{4}/g);
-                        if (yearMatches) {
-                            yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 2);
-                        } else if (m.releaseInfo) {
-                            yearMatch = m.releaseInfo.includes(year.toString()) 
-                                     || m.releaseInfo.includes((year-1).toString()) 
-                                     || m.releaseInfo.includes((year+1).toString());
-                        } else {
-                            yearMatch = true; 
-                        }
-                    }
+                    // Logic so sánh từ (Token Check) cho Dexter, From, Lost...
+                    const score = calculateMatchScore(qClean, serverNameClean);
                     
-                    if (nameMatch && yearMatch) {
-                        console.log(`   -> Khớp tại từ khóa "${query}": ${m.name}`);
-                        return true;
+                    // Nếu tên ngắn (From, Lost) -> Yêu cầu score tuyệt đối hoặc server name ngắn tương đương
+                    if (qClean.length <= 4) {
+                        // Tránh: search "From" ra "Money Heist"
+                        // Server name phải rất ngắn hoặc chứa chính xác từ đó ở vị trí tách biệt
+                        return score === 100 && Math.abs(serverNameClean.length - qClean.length) < 10;
                     }
-                    return false;
+
+                    // Với Dexter Original Sin: Cần score cao (chứa cả Original và Sin)
+                    // Ngưỡng 66% nghĩa là 3 từ phải khớp ít nhất 2 từ quan trọng
+                    return score >= 66; 
                 });
             }
-        } catch (e) {
-            console.log(`   -> Lỗi khi tìm "${query}": ${e.message}`);
-        }
+        } catch (e) {}
     }
 
     if (!match) {
-        console.log("-> Thất bại: Không tìm thấy phim nào.");
+        console.log("-> Không tìm thấy.");
         return { streams: [] };
     }
 
     const fullId = match.id;
+    console.log(`-> KHỚP: ${match.name} | ID: ${fullId}`);
 
-    // === PHẦN LẤY LINK STREAM ===
+    // === LẤY STREAM ===
     try {
         if (type === 'movie') {
             const streamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(fullId)}.json`;
@@ -214,7 +246,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return { streams: streams };
         }
     } catch (err) {
-        console.error(`Lỗi lấy stream: ${err.message}`);
+        console.error(`Lỗi: ${err.message}`);
     }
 
     return { streams: [] };
