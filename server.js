@@ -16,10 +16,10 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v17",
-    version: "17.0.0",
-    name: "Phim4K VIP (Precision)",
-    description: "Fix From/Bet/Ghibli with Accent Check & Year Enforce",
+    id: "com.phim4k.vip.final.v18",
+    version: "18.0.0",
+    name: "Phim4K VIP (F1 Fixed)",
+    description: "Fix F1 short name, Accent Check & Year Enforce",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,7 +28,7 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN (GIỮ NGUYÊN DẤU TIẾNG VIỆT) ===
 const VIETNAMESE_MAPPING = {
-    "from": "bẫy",  // CHÚ Ý: Code sẽ check có dấu "bẫy" hay không
+    "from": "bẫy",  
     "bet": "học viện đỏ đen", 
     "the wind rises": "gió vẫn thổi",
     "the boy and the heron": "thiếu niên và chim diệc",
@@ -44,16 +44,16 @@ const VIETNAMESE_MAPPING = {
     "5 centimeters per second": "5 centimet trên giây"
 };
 
-// Hàm chuẩn hóa cơ bản (vẫn dùng để search query)
+// Hàm chuẩn hóa cơ bản 
 function normalizeForSearch(title) {
     return title.toLowerCase()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, "") // Xóa dấu
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, "") 
         .replace(/['":\-.]/g, " ") 
         .replace(/\s+/g, " ")
         .trim();
 }
 
-// Hàm so sánh chuỗi CÓ DẤU (Quan trọng cho From/Bẫy)
+// Hàm so sánh chuỗi CÓ DẤU 
 function containsWithAccent(fullString, subString) {
     return fullString.toLowerCase().includes(subString.toLowerCase());
 }
@@ -92,24 +92,37 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     // === TẠO DANH SÁCH TỪ KHÓA ===
     const queries = [];
-    const mappedVietnamese = VIETNAMESE_MAPPING[originalName.toLowerCase()];
+    const lowerName = originalName.toLowerCase();
+    const mappedVietnamese = VIETNAMESE_MAPPING[lowerName];
 
-    // 1. Nếu có tên tiếng Việt, search tên tiếng Việt trước (Độ chính xác cao nhất)
+    // 1. Tên tiếng Việt (nếu có)
     if (mappedVietnamese) {
         queries.push(mappedVietnamese); 
     }
     
-    // 2. Search tên gốc (English)
+    // 2. Tên gốc
     queries.push(originalName);
 
-    // 3. Search tên sạch (nếu khác tên gốc)
+    // 3. Tên sạch
     const cleanName = normalizeForSearch(originalName);
-    if (cleanName !== originalName.toLowerCase()) queries.push(cleanName);
+    if (cleanName !== lowerName) queries.push(cleanName);
 
-    // 4. Fix Dexter (Tách dấu :)
+    // 4. Fix Dexter & F1 (Xử lý dấu hai chấm)
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
-        if (splitName.length > 3) queries.push(splitName);
+        const splitClean = normalizeForSearch(splitName);
+        
+        // SỬA LỖI Ở ĐÂY: Cho phép độ dài > 3 HOẶC tên là "f1"
+        if (splitClean.length > 3 || splitClean === 'f1') {
+            queries.push(splitName);
+        }
+    }
+
+    // 5. Fix hậu tố "The Movie" (cho chắc ăn)
+    // F1: The Movie -> Xóa "the movie" -> còn "F1"
+    const removeTheMovie = cleanName.replace(/\s+the movie$/, "").trim();
+    if (removeTheMovie !== cleanName && removeTheMovie.length > 0) {
+        queries.push(removeTheMovie);
     }
 
     const uniqueQueries = [...new Set(queries)];
@@ -119,8 +132,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     let match = null;
 
-    // === SEARCH SONG SONG (Tăng tốc độ) ===
-    // Thay vì await từng cái, ta bắn tất cả request cùng lúc
+    // === SEARCH SONG SONG ===
     const searchPromises = uniqueQueries.map(q => 
         axios.get(`${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(q)}.json`, 
             { headers: HEADERS, timeout: 5000 }).catch(() => null)
@@ -128,7 +140,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const responses = await Promise.all(searchPromises);
 
-    // Gộp tất cả kết quả lại thành một mảng duy nhất để lọc
     let allCandidates = [];
     responses.forEach(res => {
         if (res && res.data && res.data.metas) {
@@ -136,68 +147,57 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
     });
 
-    // Lọc trùng lặp ID
+    // Lọc trùng ID
     allCandidates = allCandidates.filter((v,i,a)=>a.findIndex(t=>(t.id === v.id))===i);
 
-    // === LOGIC LỌC "THẦN THÁNH" (Verify) ===
+    // === VERIFY MATCH ===
     match = allCandidates.find(m => {
         if (m.type && m.type !== type) return false;
-
-        const serverName = m.name; // Tên gốc trên server (có dấu)
+        const serverName = m.name; 
         
-        // --- BƯỚC 1: KIỂM TRA NĂM (BẮT BUỘC) ---
-        // Không bao giờ được bỏ qua bước này để tránh vụ Bet (2025) vs Kakegurui (2017)
+        // BƯỚC 1: KIỂM TRA NĂM (BẮT BUỘC)
         let yearMatch = false;
         if (!hasYear) {
             yearMatch = true;
         } else {
-            // Lấy tất cả số năm trong tên phim
             const yearMatches = serverName.match(/\d{4}/g);
             if (yearMatches) {
-                // Sai số +/- 1 năm (Khắt khe hơn v16)
+                // F1 (2025) - Sai số 1 năm
                 yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 1);
             } else if (m.releaseInfo) {
                 yearMatch = m.releaseInfo.includes(year.toString()) 
                          || m.releaseInfo.includes((year-1).toString()) 
                          || m.releaseInfo.includes((year+1).toString());
             } else {
-                // Nếu server không ghi năm, đành chấp nhận rủi ro thấp
                 yearMatch = true; 
             }
         }
+        if (!yearMatch) return false;
 
-        if (!yearMatch) return false; // Sai năm -> LOẠI NGAY
-
-        // --- BƯỚC 2: KIỂM TRA TÊN ---
+        // BƯỚC 2: KIỂM TRA TÊN
         
-        // A. NẾU CÓ MAPPING TIẾNG VIỆT
-        if (mappedVietnamese) {
-            // Kiểm tra CÓ DẤU.
-            // Ví dụ: mappedVietnamese = "bẫy"
-            // serverName = "Bảy thế giới" -> Chứa "bẫy"? KHÔNG -> Loại.
-            // serverName = "Bẫy (2022) From" -> Chứa "bẫy"? CÓ -> Nhận.
-            if (containsWithAccent(serverName, mappedVietnamese)) {
-                return true;
-            }
-            // Nếu không chứa tên tiếng Việt đúng dấu, thì kiểm tra xem nó có chứa tên Tiếng Anh gốc không?
-            // (Phòng trường hợp server đổi tên tiếng Việt khác mapping của ta)
+        // A. Ưu tiên Mapping Tiếng Việt (CÓ DẤU)
+        if (mappedVietnamese && containsWithAccent(serverName, mappedVietnamese)) {
+            return true;
         }
 
-        // B. KIỂM TRA TÊN TIẾNG ANH (LOGIC PHỤ TRỢ)
+        // B. Logic Tiếng Anh
         const qClean = normalizeForSearch(originalName);
         const serverClean = normalizeForSearch(serverName);
 
-        // Nếu từ khóa ngắn (From, Bet)
-        if (qClean.length < 4) {
-            // Phải bắt đầu bằng tên đó
-            // Ví dụ: "From" -> OK "From (2022)"
-            // Ví dụ: "From" -> OK "Bẫy (2022) From" (Nếu server lưu kiểu này thì logic contains ở trên đã bắt rồi, nếu chưa bắt thì check tiếng Anh)
-            // Regex: Tìm chữ "From" ở đầu string, HOẶC sau dấu cách/dấu ngoặc
-            const regex = new RegExp(`(^|\\s|\\(|\\-)${qClean}(\\s|\\)|\\:|$)`, 'i');
-            return regex.test(serverClean);
+        // Nếu từ khóa ngắn (F1, Bet, From)
+        // Tìm bất kỳ từ khóa nào trong list queries mà ngắn < 4 ký tự và khớp logic strict
+        for (const query of uniqueQueries) {
+            const qShort = normalizeForSearch(query);
+            if (qShort.length < 4) {
+                 // Logic Strict Start: Tên server phải bắt đầu bằng từ khóa đó
+                 // Regex: (^|\s|\(|\-)f1(\s|\)|\:|$)
+                 const regex = new RegExp(`(^|\\s|\\(|\\-)${qShort}(\\s|\\)|\\:|$)`, 'i');
+                 if (regex.test(serverClean)) return true;
+            }
         }
 
-        // Tên dài bình thường
+        // Match thường cho tên dài
         return serverClean.includes(qClean) || qClean.includes(serverClean);
     });
 
