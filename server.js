@@ -18,31 +18,31 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v14",
     version: "14.0.0",
-    name: "Phim4K VIP (Precision Fix)",
-    description: "Fix From, Dexter OS, Ghibli Names",
+    name: "Phim4K VIP (Correct Name)",
+    description: "Fix From, Ghibli Names, Dexter & Strict Filtering",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN ÁNH XẠ (Đã cập nhật chuẩn Ghibli) ===
+// === 1. TỪ ĐIỂN ÁNH XẠ CHÍNH XÁC (UPDATED) ===
 const TITLE_MAPPING = {
-    "from": "nguồn gốc",
-    "lost": "mất tích",
-    "dark": "đêm lặng",
+    "from": "bẫy",  // Đã sửa theo info bạn cung cấp
+    "the wind rises": "gió vẫn thổi", // Đã sửa
+    "the boy and the heron": "thiếu niên và chim diệc", // Đã thêm
     "howl's moving castle": "lâu đài bay của pháp sư howl",
-    "the wind rises": "gió vẫn thổi", // Đã sửa theo feedback
     "spirited away": "vùng đất linh hồn",
     "princess mononoke": "công chúa mononoke",
     "my neighbor totoro": "hàng xóm của tôi là totoro",
     "grave of the fireflies": "mộ đom đóm",
     "ponyo": "cô bé người cá ponyo",
     "weathering with you": "đứa con của thời tiết",
-    "your name": "tên cậu là gì"
+    "your name": "tên cậu là gì",
+    "suzume": "khóa chặt cửa nào suzume",
+    "5 centimeters per second": "5 centimet trên giây"
 };
 
-// === 2. HÀM CHUẨN HÓA ===
 function normalizeTitle(title) {
     return title.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, "")
@@ -51,33 +51,33 @@ function normalizeTitle(title) {
         .trim();
 }
 
-// === 3. TẠO TỪ KHÓA TÌM KIẾM (An toàn hơn) ===
+// === 2. TẠO TỪ KHÓA ===
 function getSearchQueries(originalName) {
     const clean = normalizeTitle(originalName);
     const queries = [];
 
-    // Ưu tiên 1: Kiểm tra từ điển
+    // Ưu tiên: Từ điển
     const lowerOriginal = originalName.toLowerCase();
     if (TITLE_MAPPING[lowerOriginal]) {
         queries.push(TITLE_MAPPING[lowerOriginal]);
     }
 
-    queries.push(originalName); // Tên gốc
-    if (clean !== lowerOriginal) queries.push(clean); // Tên sạch
+    queries.push(originalName);
+    if (clean !== lowerOriginal) queries.push(clean);
 
-    // Xử lý hậu tố "The Movie" (Giữ lại cái này cho F1)
+    // Hậu tố The Movie
     const removeTheMovie = clean.replace(/\s+the movie$/, "").trim();
     if (removeTheMovie !== clean) queries.push(removeTheMovie);
 
-    // FIX QUAN TRỌNG CHO DEXTER: 
-    // Bỏ logic cắt dấu ":" (split colon). 
-    // "Dexter: Original Sin" sẽ KHÔNG bị biến thành "Dexter" nữa.
-    // Trừ trường hợp đặc biệt: "F1:..."
-    if (clean.startsWith("f1 ")) {
-        queries.push("f1");
+    // Tách dấu hai chấm (Dexter)
+    if (originalName.includes(":")) {
+        const splitName = originalName.split(":")[0].trim();
+        // Chỉ thêm nếu tên tách ra đủ dài hoặc là F1
+        if (splitName.length > 3 || splitName.toLowerCase() === 'f1') {
+            queries.push(splitName);
+        }
     }
 
-    // Dính liền (10Dance)
     const noSpace = clean.replace(/\s/g, "");
     if (noSpace !== clean) queries.push(noSpace);
 
@@ -113,12 +113,15 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (!meta) return { streams: [] };
 
     const originalName = meta.name;
+    const cleanOriginalName = normalizeTitle(originalName);
     let year = parseInt(meta.year);
     const hasYear = !isNaN(year); 
 
     const searchQueries = getSearchQueries(originalName);
-    console.log(`\n=== Xử lý: "${originalName}" | Type: ${type} ===`);
-    console.log(`-> Query list: ${JSON.stringify(searchQueries)}`);
+    const vietnameseTitle = TITLE_MAPPING[originalName.toLowerCase()]; // Lấy tên tiếng Việt để dùng cho logic filter
+
+    console.log(`\n=== Xử lý: "${originalName}" (${year}) | Type: ${type} ===`);
+    console.log(`-> Queries: ${JSON.stringify(searchQueries)}`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     let match = null;
@@ -133,28 +136,47 @@ builder.defineStreamHandler(async ({ type, id }) => {
             if (res.data && res.data.metas && res.data.metas.length > 0) {
                 
                 match = res.data.metas.find(m => {
-                    // 1. CHECK TYPE
                     if (m.type && m.type !== type) return false;
 
                     const serverNameClean = normalizeTitle(m.name);
                     const qClean = normalizeTitle(query);
 
-                    // 2. CHECK TÊN (FIXED FROM/LOST)
+                    // LOGIC 1: CHECK TÊN
                     let nameMatch = false;
                     
-                    // Nâng ngưỡng strict mode lên 5 ký tự (để bao gồm cả từ 4 ký tự như "From")
-                    if (qClean.length <= 5) {
-                        // Regex: Bắt buộc Tên Server phải BẮT ĐẦU bằng từ khóa
-                        // "From" sẽ khớp "From (2022)"
-                        // "From" sẽ KHÔNG khớp "Money Heist: From..." (vì bắt đầu bằng M)
-                        const strictRegex = new RegExp(`^${qClean}$|^${qClean}\\s|^${qClean}\\W`, 'i');
-                        nameMatch = strictRegex.test(serverNameClean);
-                    } else {
-                        // Logic cũ cho tên dài
+                    // A. Nếu là từ khóa tiếng Việt (từ mapping) -> Chỉ cần chứa
+                    if (vietnameseTitle && normalizeTitle(vietnameseTitle) === qClean) {
+                        nameMatch = serverNameClean.includes(qClean);
+                    }
+                    // B. Nếu từ khóa tiếng Anh QUÁ NGẮN (< 4 ký tự) như "From", "F1"
+                    else if (qClean.length < 4) {
+                        // 1. Phải bắt đầu bằng tên đó (Strict Start)
+                        const strictStart = new RegExp(`^${qClean}(\\s|\\W|$)`, 'i').test(serverNameClean);
+                        // 2. HOẶC server name chứa tên tiếng Việt của phim đó (Logic Fix cho From/Bẫy)
+                        const containsVietnamese = vietnameseTitle && serverNameClean.includes(normalizeTitle(vietnameseTitle));
+                        
+                        nameMatch = strictStart || containsVietnamese;
+                    } 
+                    // C. Tên dài bình thường
+                    else {
                         nameMatch = serverNameClean.includes(qClean) || qClean.includes(serverNameClean);
                     }
 
-                    // 3. CHECK NĂM
+                    // FIX DEXTER: Kiểm tra Subtitle Conflict
+                    // Nếu ta đang search bằng từ khóa ngắn (ví dụ "Dexter") tách ra từ tên gốc ("Dexter: Original Sin")
+                    // Mà tên gốc có phần đuôi ("original sin") KHÔNG xuất hiện trong tên Server ("dexter resurrection") -> Reject
+                    if (originalName.includes(":") && qClean.length < cleanOriginalName.length) {
+                         const originalSuffix = cleanOriginalName.replace(qClean, "").trim();
+                         // Nếu hậu tố đủ dài (>3 ký tự) và server name KHÔNG chứa hậu tố đó -> Có mùi sai phim
+                         if (originalSuffix.length > 3 && !serverNameClean.includes(originalSuffix)) {
+                             // Tuy nhiên, cẩn thận kẻo server đặt tên khác. 
+                             // Ta chỉ reject nếu server name CÓ chứa một hậu tố KHÁC (Logic này khó, nên tạm thời dùng check Năm chặt hơn)
+                             // Nếu search fallback, giảm biên độ năm xuống còn +/- 0 hoặc 1
+                             if (Math.abs(parseInt(m.releaseInfo || "0") - year) > 1) return false;
+                         }
+                    }
+
+                    // LOGIC 2: CHECK NĂM
                     let yearMatch = false;
                     if (!hasYear) {
                         yearMatch = true;
@@ -171,22 +193,16 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         }
                     }
                     
-                    if (nameMatch && yearMatch) {
-                        console.log(`   -> KHỚP (${query}): ${m.name}`);
-                        return true;
-                    }
-                    return false;
+                    return nameMatch && yearMatch;
                 });
             }
         } catch (e) {}
     }
 
-    if (!match) {
-        console.log("-> Không tìm thấy phim phù hợp.");
-        return { streams: [] };
-    }
+    if (!match) return { streams: [] };
 
     const fullId = match.id;
+    console.log(`-> KHỚP: ${match.name} | ID: ${fullId}`);
 
     // === LẤY STREAM ===
     try {
