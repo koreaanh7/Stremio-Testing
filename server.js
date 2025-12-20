@@ -16,21 +16,22 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v14",
-    version: "14.0.0",
-    name: "Phim4K VIP (Correct Name)",
-    description: "Fix From, Ghibli Names, Dexter & Strict Filtering",
+    id: "com.phim4k.vip.final.v15",
+    version: "15.0.0",
+    name: "Phim4K VIP (Accent Fix)",
+    description: "Fix From (Bẫy/Bây), Bet, Kakegurui",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN ÁNH XẠ CHÍNH XÁC (UPDATED) ===
+// === 1. TỪ ĐIỂN (Cập nhật Bet & Kakegurui) ===
 const TITLE_MAPPING = {
-    "from": "bẫy",  // Đã sửa theo info bạn cung cấp
-    "the wind rises": "gió vẫn thổi", // Đã sửa
-    "the boy and the heron": "thiếu niên và chim diệc", // Đã thêm
+    "from": "bẫy",  // Sẽ dùng check có dấu
+    "bet": "kakegurui", // Map Bet sang Kakegurui để tìm thử
+    "the wind rises": "gió vẫn thổi",
+    "the boy and the heron": "thiếu niên và chim diệc",
     "howl's moving castle": "lâu đài bay của pháp sư howl",
     "spirited away": "vùng đất linh hồn",
     "princess mononoke": "công chúa mononoke",
@@ -43,6 +44,7 @@ const TITLE_MAPPING = {
     "5 centimeters per second": "5 centimet trên giây"
 };
 
+// Hàm bỏ dấu (dùng cho tiếng Anh hoặc search lỏng)
 function normalizeTitle(title) {
     return title.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, "")
@@ -56,23 +58,26 @@ function getSearchQueries(originalName) {
     const clean = normalizeTitle(originalName);
     const queries = [];
 
-    // Ưu tiên: Từ điển
     const lowerOriginal = originalName.toLowerCase();
+    
+    // Mapping: Nếu có trong từ điển, đẩy lên đầu
     if (TITLE_MAPPING[lowerOriginal]) {
         queries.push(TITLE_MAPPING[lowerOriginal]);
+    }
+
+    // Nếu tên gốc là "Bet", thêm cả "kakegurui" vào để search (phòng hờ server chưa đổi tên)
+    if (lowerOriginal === 'bet') {
+        queries.push("kakegurui");
     }
 
     queries.push(originalName);
     if (clean !== lowerOriginal) queries.push(clean);
 
-    // Hậu tố The Movie
     const removeTheMovie = clean.replace(/\s+the movie$/, "").trim();
     if (removeTheMovie !== clean) queries.push(removeTheMovie);
 
-    // Tách dấu hai chấm (Dexter)
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
-        // Chỉ thêm nếu tên tách ra đủ dài hoặc là F1
         if (splitName.length > 3 || splitName.toLowerCase() === 'f1') {
             queries.push(splitName);
         }
@@ -118,7 +123,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const hasYear = !isNaN(year); 
 
     const searchQueries = getSearchQueries(originalName);
-    const vietnameseTitle = TITLE_MAPPING[originalName.toLowerCase()]; // Lấy tên tiếng Việt để dùng cho logic filter
+    // Lấy tên map gốc (có dấu) để check
+    const mappedTitleRaw = TITLE_MAPPING[originalName.toLowerCase()]; 
 
     console.log(`\n=== Xử lý: "${originalName}" (${year}) | Type: ${type} ===`);
     console.log(`-> Queries: ${JSON.stringify(searchQueries)}`);
@@ -138,56 +144,61 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 match = res.data.metas.find(m => {
                     if (m.type && m.type !== type) return false;
 
+                    const rawServerName = m.name.toLowerCase(); // Tên có dấu của server
                     const serverNameClean = normalizeTitle(m.name);
                     const qClean = normalizeTitle(query);
 
-                    // LOGIC 1: CHECK TÊN
+                    // --- CHECK 1: TÊN (NÂNG CẤP CHECK DẤU) ---
                     let nameMatch = false;
-                    
-                    // A. Nếu là từ khóa tiếng Việt (từ mapping) -> Chỉ cần chứa
-                    if (vietnameseTitle && normalizeTitle(vietnameseTitle) === qClean) {
-                        nameMatch = serverNameClean.includes(qClean);
+
+                    // A. Trường hợp đặc biệt: FROM (Bẫy)
+                    // Nếu mapping là "bẫy", ta bắt buộc server name phải chứa chữ "bẫy" (có dấu)
+                    // để tránh nhầm với "bây" (trong "bây giờ")
+                    if (mappedTitleRaw && mappedTitleRaw === "bẫy") {
+                         // Check chính xác từ "bẫy" hoặc "From" đứng một mình
+                         const hasBay = rawServerName.includes("bẫy"); 
+                         const hasExactFrom = /\bfrom\b/.test(rawServerName); // Regex: chữ From phải đứng riêng
+                         
+                         nameMatch = hasBay || hasExactFrom;
                     }
-                    // B. Nếu từ khóa tiếng Anh QUÁ NGẮN (< 4 ký tự) như "From", "F1"
+                    // B. Trường hợp dùng Mapping khác (Gió nổi,...) -> Check chứa (có dấu càng tốt)
+                    else if (mappedTitleRaw && normalizeTitle(mappedTitleRaw) === qClean) {
+                         nameMatch = rawServerName.includes(mappedTitleRaw) || serverNameClean.includes(qClean);
+                    }
+                    // C. Trường hợp tên ngắn (< 4 ký tự) như "Bet", "F1"
                     else if (qClean.length < 4) {
-                        // 1. Phải bắt đầu bằng tên đó (Strict Start)
                         const strictStart = new RegExp(`^${qClean}(\\s|\\W|$)`, 'i').test(serverNameClean);
-                        // 2. HOẶC server name chứa tên tiếng Việt của phim đó (Logic Fix cho From/Bẫy)
-                        const containsVietnamese = vietnameseTitle && serverNameClean.includes(normalizeTitle(vietnameseTitle));
-                        
-                        nameMatch = strictStart || containsVietnamese;
+                        nameMatch = strictStart;
                     } 
-                    // C. Tên dài bình thường
+                    // D. Tên thường
                     else {
                         nameMatch = serverNameClean.includes(qClean) || qClean.includes(serverNameClean);
                     }
 
-                    // FIX DEXTER: Kiểm tra Subtitle Conflict
-                    // Nếu ta đang search bằng từ khóa ngắn (ví dụ "Dexter") tách ra từ tên gốc ("Dexter: Original Sin")
-                    // Mà tên gốc có phần đuôi ("original sin") KHÔNG xuất hiện trong tên Server ("dexter resurrection") -> Reject
-                    if (originalName.includes(":") && qClean.length < cleanOriginalName.length) {
-                         const originalSuffix = cleanOriginalName.replace(qClean, "").trim();
-                         // Nếu hậu tố đủ dài (>3 ký tự) và server name KHÔNG chứa hậu tố đó -> Có mùi sai phim
-                         if (originalSuffix.length > 3 && !serverNameClean.includes(originalSuffix)) {
-                             // Tuy nhiên, cẩn thận kẻo server đặt tên khác. 
-                             // Ta chỉ reject nếu server name CÓ chứa một hậu tố KHÁC (Logic này khó, nên tạm thời dùng check Năm chặt hơn)
-                             // Nếu search fallback, giảm biên độ năm xuống còn +/- 0 hoặc 1
-                             if (Math.abs(parseInt(m.releaseInfo || "0") - year) > 1) return false;
-                         }
-                    }
+                    if (!nameMatch) return false;
 
-                    // LOGIC 2: CHECK NĂM
+                    // --- CHECK 2: NĂM (NÂNG CẤP CHO KAKEGURUI) ---
                     let yearMatch = false;
                     if (!hasYear) {
                         yearMatch = true;
                     } else {
+                        // Lấy tất cả năm trong tên server
                         const yearMatches = m.name.match(/\d{4}/g);
+                        
+                        // FIX KAKEGURUI: Nếu tên là "Kakegurui" (dễ trùng Anime/Live Action)
+                        // Ta giảm sai số năm xuống 0 hoặc 1 (ngặt nghèo hơn) thay vì 2
+                        const isRiskyTitle = qClean.includes("kakegurui") || qClean.includes("bet");
+                        const tolerance = isRiskyTitle ? 1 : 2; 
+
                         if (yearMatches) {
-                            yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 2);
+                            yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= tolerance);
                         } else if (m.releaseInfo) {
-                            yearMatch = m.releaseInfo.includes(year.toString()) 
-                                     || m.releaseInfo.includes((year-1).toString()) 
-                                     || m.releaseInfo.includes((year+1).toString());
+                            // Check release info
+                            for (let i = 0; i <= tolerance; i++) {
+                                if (m.releaseInfo.includes((year + i).toString()) || m.releaseInfo.includes((year - i).toString())) {
+                                    yearMatch = true; break;
+                                }
+                            }
                         } else {
                             yearMatch = true; 
                         }
