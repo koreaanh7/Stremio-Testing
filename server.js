@@ -16,26 +16,28 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v22",
-    version: "22.0.0",
-    name: "Phim4K VIP (Precision Fix)",
-    description: "Fix Sentimental Value, Dark & Short Title Logic",
+    id: "com.phim4k.vip.final.v23",
+    version: "2.0.0",
+    name: "Phim4K VIP (Short-Name Architect)",
+    description: "Fix F1, Elf, Short Queries Logic",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MỞ RỘNG (THÊM TIẾNG NA UY / PHÁP / NHẬT) ===
+// === 1. TỪ ĐIỂN MỞ RỘNG ===
 const VIETNAMESE_MAPPING = {
     // --- FIX CỤ THỂ CỦA BẠN ---
-    "sentimental value": ["giá trị tình cảm", "affeksjonsverdi"], // Fix phim Na Uy
-    "dark": ["đêm lặng"], // Fix Dark Series
+    "elf": ["chàng tiên giáng trần", "elf"], // Fix Elf
+    "f1": ["f1"],
+    "f1: the movie": ["f1"], // Map thẳng về F1
+    "sentimental value": ["giá trị tình cảm", "affeksjonsverdi"],
+    "dark": ["đêm lặng"], 
 
-    // --- CÁC MAPPING KHÁC (GIỮ NGUYÊN) ---
+    // --- CÁC MAPPING KHÁC ---
     "from": ["bẫy"],
     "bet": ["học viện đỏ đen"],
-    "f1": ["f1"],
     "sisu: road to revenge": ["sisu 2"],
     "chainsaw man - the movie: reze arc": ["chainsaw man movie", "reze arc"],
     "10 dance": ["10dance", "10 dance"],
@@ -94,13 +96,13 @@ function extractEpisodeInfo(filename) {
     return null;
 }
 
-// === HÀM MATCH VỚI LOGIC NGHIÊM NGẶT CHO TÊN NGẮN ===
+// === HÀM MATCH VỚI LOGIC LINH HOẠT HƠN (V23) ===
 function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseList, queries) {
     if (candidate.type && candidate.type !== type) return false;
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
-    // 1. KIỂM TRA NĂM
+    // 1. KIỂM TRA NĂM (Bắt buộc)
     let yearMatch = false;
     if (!hasYear) yearMatch = true;
     else {
@@ -116,45 +118,43 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     }
     if (!yearMatch) return false;
 
-    // 2. LOGIC TIẾNG VIỆT (Ưu tiên cao nhất)
+    // 2. ƯU TIÊN: LOGIC TIẾNG VIỆT
+    // Nếu khớp alias tiếng Việt thì LẤY NGAY (Bỏ qua logic check độ dài)
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
             if (serverClean.includes(mappedClean)) {
-                // Với các từ khóa đặc biệt ngắn hoặc alias ngoại ngữ (Affeksjonsverdi), bỏ qua dấu
-                if (['sisu 2', 'f1', '10dance', 'affeksjonsverdi'].includes(mappedVietnamese)) return true;
+                if (['sisu 2', 'f1', '10dance', 'affeksjonsverdi', 'elf'].includes(mappedVietnamese)) return true;
                 return containsWithAccent(serverName, mappedVietnamese);
             }
         }
     }
 
-    // 3. LOGIC TIẾNG ANH (CẢI TIẾN CHO TÊN NGẮN)
-    const qClean = normalizeForSearch(originalName);
-    
-    // Nếu tên phim quá ngắn (<= 4 ký tự, VD: Dark, F1, From)
-    if (qClean.length <= 4) {
-        // Chỉ chấp nhận nếu tên trên server chứa từ đó DƯỚI DẠNG TỪ ĐƠN (Word Boundary)
-        // Regex: Tìm chính xác từ đó, không nằm trong từ khác
-        // VD: Tìm "Dark" -> Khớp "Dark", "Dark (2017)" -> KHÔNG khớp "Darkness", "Dark Crystal" (Do Dark Crystal là cụm từ ghép, ta sẽ lọc kỹ hơn ở bước sau)
-        const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
-        if (!strictRegex.test(serverClean)) return false;
-        
-        // Anti-False Positive cho "Dark":
-        // Nếu tìm "Dark" mà server trả về "The Dark Crystal", độ dài chênh lệch quá lớn.
-        // Heuristic: Nếu server name dài gấp 5 lần query name -> Nghi vấn (Trừ khi đã khớp Tiếng Việt)
-        if (serverClean.length > qClean.length * 5) return false; 
-        
-        return true;
-    }
-
-    // Tên dài bình thường -> Check như cũ
+    // 3. LOGIC TIẾNG ANH (DUYỆT TỪNG QUERY)
+    // Thay vì check originalName, ta check từng query trong danh sách queries
     for (const query of queries) {
-        const qShort = normalizeForSearch(query);
-        if (qShort.length < 4) continue; // Đã check ở trên
-        if (serverClean.includes(qShort)) return true;
+        const qClean = normalizeForSearch(query);
+        
+        // --- CASE 1: Query Quá Ngắn (<= 4 ký tự) VD: "F1", "Elf", "Dark" ---
+        if (qClean.length <= 4) {
+            // Regex: Phải là từ đơn (Word Boundary)
+            const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
+            if (strictRegex.test(serverClean)) {
+                // Heuristic độ dài: 
+                // Nếu tìm "Elf" (3 chars) mà ra tên quá dài -> Nghi ngờ.
+                // Nhưng nới lỏng hơn v22: Cho phép dài gấp 7 lần (thay vì 5) để bắt được tên server có kèm tiếng Việt
+                if (serverClean.length <= qClean.length * 7) {
+                    return true;
+                }
+            }
+        } 
+        // --- CASE 2: Query Bình Thường ---
+        else {
+            if (serverClean.includes(qClean)) return true;
+        }
     }
 
-    return serverClean.includes(qClean) || qClean.includes(serverClean);
+    return false;
 }
 
 builder.defineStreamHandler(async ({ type, id }) => {
@@ -192,7 +192,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
         const splitClean = normalizeForSearch(splitName);
         if (splitClean.length > 3 || splitClean === 'f1') queries.push(splitName);
     }
+    // Fix "10 Dance"
     if (/\d/.test(cleanName) && cleanName.includes(" ")) queries.push(cleanName.replace(/\s/g, ""));
+    // Fix "The Movie"
     const removeTheMovie = cleanName.replace(/\s+the movie$/, "").trim();
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
@@ -220,19 +222,15 @@ builder.defineStreamHandler(async ({ type, id }) => {
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
 
-    // === BƯỚC LỌC CUỐI CÙNG: LOẠI BỎ "DARK CRYSTAL" KHỎI "DARK" ===
-    // Nếu có nhiều kết quả, và tên phim gốc rất ngắn (Dark), hãy ưu tiên kết quả ngắn hơn.
+    // === BƯỚC LỌC CUỐI CÙNG: SHORT TITLE CLEANUP ===
+    // Chỉ áp dụng lọc bớt nếu tìm kiếm từ khóa cực ngắn (<= 5) VÀ có nhiều kết quả
+    // Để loại bỏ các kết quả "dài loằng ngoằng" không liên quan (như vụ Dark Crystal)
+    // Nhưng phải cẩn thận không loại bỏ tên tiếng Việt dài của chính phim đó.
     if (cleanName.length <= 5 && matchedCandidates.length > 1) {
-        // Sắp xếp theo độ dài tên (ngắn nhất lên đầu)
         matchedCandidates.sort((a, b) => a.name.length - b.name.length);
-        
-        // Lấy độ dài ngắn nhất
         const minLen = matchedCandidates[0].name.length;
-        
-        // Chỉ giữ lại những phim có độ dài không quá chênh lệch so với phim ngắn nhất (Gấp 2 lần là tối đa)
-        // Ví dụ: Dark (len 4) vs Dark Crystal (len 20). 20 > 4*3 -> Loại.
-        matchedCandidates = matchedCandidates.filter(m => m.name.length <= minLen * 3);
-        console.log("-> Đã lọc bớt các tên quá dài so với phim gốc (Logic Short Title).");
+        // Logic mới: Chỉ lọc nếu độ dài chênh lệch quá 4 lần so với kết quả ngắn nhất tìm thấy
+        matchedCandidates = matchedCandidates.filter(m => m.name.length <= minLen * 4);
     }
 
     if (matchedCandidates.length === 0) return { streams: [] };
