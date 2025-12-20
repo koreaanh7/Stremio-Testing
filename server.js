@@ -16,32 +16,55 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v19",
-    version: "19.0.0",
-    name: "Phim4K VIP (Strict Veto)",
-    description: "Fix From/Bet/F1 with Veto Logic",
+    id: "com.phim4k.vip.final.v20",
+    version: "20.0.0",
+    name: "Phim4K VIP (Anime+)",
+    description: "Fix Ghibli, Naruto, Sisu 2 & Chainsaw Man",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN ===
+// === 1. TỪ ĐIỂN MỞ RỘNG (GHIBLI & ANIME & NEW MOVIES) ===
 const VIETNAMESE_MAPPING = {
+    // --- SPECIAL CASES ---
     "from": "bẫy",  
     "bet": "học viện đỏ đen", 
+    "f1": "f1", // Giữ nguyên
+    "sisu: road to revenge": "sisu 2", // Map thẳng sang Sisu 2
+    "chainsaw man - the movie: reze arc": "chainsaw man movie", // Rút gọn để tìm dễ hơn
+    
+    // --- GHIBLI / ANIME MOVIES ---
+    "the red turtle": "rùa đỏ",
+    "from up on poppy hill": "ngọn đồi hoa hồng anh",
+    "the secret world of arrietty": "thế giới bí mật của arrietty",
+    "the cat returns": "loài mèo trả ơn",
+    "princess mononoke": "công chúa mononoke",
+    "ocean waves": "những con sóng đại dương",
+    "only yesterday": "chỉ còn ngày hôm qua",
     "the wind rises": "gió vẫn thổi",
     "the boy and the heron": "thiếu niên và chim diệc",
     "howl's moving castle": "lâu đài bay của pháp sư howl",
     "spirited away": "vùng đất linh hồn",
-    "princess mononoke": "công chúa mononoke",
     "my neighbor totoro": "hàng xóm của tôi là totoro",
     "grave of the fireflies": "mộ đom đóm",
     "ponyo": "cô bé người cá ponyo",
     "weathering with you": "đứa con của thời tiết",
     "your name": "tên cậu là gì",
     "suzume": "khóa chặt cửa nào suzume",
-    "5 centimeters per second": "5 centimet trên giây"
+    "5 centimeters per second": "5 centimet trên giây",
+    "whisper of the heart": "lời thì thầm của trái tim",
+    "pom poko": "cuộc chiến gấu mèo",
+    "porco rosso": "chú heo màu đỏ",
+    "tales from earthsea": "huyền thoại đất liền và đại dương",
+    "when marnie was there": "hồi ức về marnie",
+    "the tale of the princess kaguya": "chuyện nàng công chúa kaguya",
+
+    // --- SERIES ANIME ---
+    "naruto": "naruto", // Để đảm bảo query đúng
+    "10 dance": "10 dance",
+    "sentimental value": "sentimental value"
 };
 
 function normalizeForSearch(title) {
@@ -63,14 +86,28 @@ async function getCinemetaMetadata(type, imdbId) {
     } catch (e) { return null; }
 }
 
+// === CẬP NHẬT LOGIC TÁCH TẬP PHIM (CHO NARUTO/ANIME) ===
 function extractEpisodeInfo(filename) {
     const name = filename.toLowerCase();
-    const matchSE = name.match(/(?:s|season)\s?(\d{1,2})[\s\xe.-]*(?:e|ep|episode|tap)\s?(\d{1,2})/);
+    
+    // 1. Chuẩn SxxExx (Series Mỹ/Hàn)
+    const matchSE = name.match(/(?:s|season)\s?(\d{1,2})[\s\xe.-]*(?:e|ep|episode|tap)\s?(\d{1,3})/);
     if (matchSE) return { s: parseInt(matchSE[1]), e: parseInt(matchSE[2]) };
-    const matchX = name.match(/(\d{1,2})x(\d{1,2})/);
+
+    // 2. Kiểu 1x01
+    const matchX = name.match(/(\d{1,2})x(\d{1,3})/);
     if (matchX) return { s: parseInt(matchX[1]), e: parseInt(matchX[2]) };
-    const matchE = name.match(/(?:e|ep|episode|tap)\s?(\d{1,2})/);
+
+    // 3. Kiểu Anime/TV Show: "Tập 01", "Ep 100", " - 05 " (Bỏ qua Season, gán s=0 hoặc s=1)
+    // Regex này bắt: Chữ "tap/ep" + số, HOẶC dấu gạch ngang/cách + số ở cuối hoặc giữa
+    const matchE = name.match(/(?:e|ep|episode|tap|#)\s?(\d{1,4})/);
     if (matchE) return { s: 0, e: parseInt(matchE[1]) };
+
+    // 4. Trường hợp đặc biệt: Chỉ có số đứng riêng lẻ (nguy hiểm nhưng cần cho Anime cũ)
+    // Ví dụ: "Naruto - 005.mp4"
+    const matchSoloNumber = name.match(/[\s\-\.](\d{1,3})(?:[\s\.]|$)/);
+    if (matchSoloNumber) return { s: 0, e: parseInt(matchSoloNumber[1]) };
+
     return null;
 }
 
@@ -88,26 +125,31 @@ builder.defineStreamHandler(async ({ type, id }) => {
     let year = parseInt(meta.year);
     const hasYear = !isNaN(year); 
 
-    // === TẠO QUERY (Có fix F1) ===
+    // === TẠO QUERY ===
     const queries = [];
     const lowerName = originalName.toLowerCase();
     const mappedVietnamese = VIETNAMESE_MAPPING[lowerName];
 
+    // 1. Mapping (Tiếng Việt hoặc Alias đặc biệt như Sisu 2)
     if (mappedVietnamese) queries.push(mappedVietnamese); 
+    
+    // 2. Tên gốc
     queries.push(originalName);
 
+    // 3. Tên sạch
     const cleanName = normalizeForSearch(originalName);
     if (cleanName !== lowerName) queries.push(cleanName);
 
+    // 4. Fix F1 / Tên ngắn
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
         const splitClean = normalizeForSearch(splitName);
-        // Fix F1: Chấp nhận tên ngắn nếu là f1
         if (splitClean.length > 3 || splitClean === 'f1') {
             queries.push(splitName);
         }
     }
 
+    // 5. Fix "The Movie"
     const removeTheMovie = cleanName.replace(/\s+the movie$/, "").trim();
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) {
         queries.push(removeTheMovie);
@@ -133,8 +175,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
             allCandidates = allCandidates.concat(res.data.metas);
         }
     });
-
-    // Lọc trùng
     allCandidates = allCandidates.filter((v,i,a)=>a.findIndex(t=>(t.id === v.id))===i);
 
     // === VERIFY LOGIC (VETO PROTOCOL) ===
@@ -143,54 +183,47 @@ builder.defineStreamHandler(async ({ type, id }) => {
         const serverName = m.name; 
         const serverClean = normalizeForSearch(serverName);
         
-        // 1. KIỂM TRA NĂM (BẮT BUỘC)
+        // 1. KIỂM TRA NĂM (Nới lỏng cho Anime)
         let yearMatch = false;
         if (!hasYear) yearMatch = true;
         else {
             const yearMatches = serverName.match(/\d{4}/g);
-            if (yearMatches) yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 1);
-            else if (m.releaseInfo) yearMatch = m.releaseInfo.includes(year.toString()) || m.releaseInfo.includes((year-1).toString()) || m.releaseInfo.includes((year+1).toString());
-            else yearMatch = true; 
+            if (yearMatches) {
+                // Với Anime/Hoạt hình, nới lỏng sai số lên 2 năm
+                // Ví dụ Naruto 2002 có thể bị ghi là 2000 hoặc 2004 trên server
+                const tolerance = (type === 'series' || originalName.includes('Naruto')) ? 2 : 1;
+                yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= tolerance);
+            } else if (m.releaseInfo) {
+                yearMatch = m.releaseInfo.includes(year.toString()) 
+                         || m.releaseInfo.includes((year-1).toString()) 
+                         || m.releaseInfo.includes((year+1).toString());
+            } else yearMatch = true; 
         }
         if (!yearMatch) return false;
 
-        // 2. LOGIC TÊN TIẾNG VIỆT (QUYỀN PHỦ QUYẾT)
-        // Nếu phim có Mapping Tiếng Việt
+        // 2. LOGIC TIẾNG VIỆT (QUYỀN PHỦ QUYẾT)
         if (mappedVietnamese) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
-            
-            // Nếu tên Server CÓ CHỨA từ khóa tiếng Việt (dù có dấu hay không)
-            // Ví dụ: server "Bây giờ" (clean: bay gio), mapping "bẫy" (clean: bay)
-            // -> Điều kiện này True
             if (serverClean.includes(mappedClean)) {
-                
-                // THÌ BẮT BUỘC PHẢI KHỚP DẤU
-                // "Bây giờ" KHÔNG chứa "bẫy" -> False -> RETURN FALSE NGAY (Không check tiếp logic dưới)
-                if (!containsWithAccent(serverName, mappedVietnamese)) {
-                    return false; // CHẶN ĐỨNG SAI SÓT
-                }
-                
-                // Nếu khớp dấu -> LẤY LUÔN
+                // Nếu là Sisu 2 (Alias không dấu), bỏ qua check dấu
+                if (mappedVietnamese === 'sisu 2') return true; 
+
+                // Còn lại check dấu nghiêm ngặt (From -> bẫy)
+                if (!containsWithAccent(serverName, mappedVietnamese)) return false; 
                 return true;
             }
-            // Nếu server hoàn toàn không chứa từ khóa Việt (ví dụ tên server là "From (2022)"),
-            // thì bỏ qua block này, chạy tiếp xuống logic tiếng Anh.
         }
 
         // 3. LOGIC TIẾNG ANH / TÊN NGẮN
         const qClean = normalizeForSearch(originalName);
-        
-        // Logic cho từ khóa ngắn (F1, Bet, From)
         for (const query of uniqueQueries) {
             const qShort = normalizeForSearch(query);
             if (qShort.length < 4) {
-                 // Phải bắt đầu bằng từ khóa đó
                  const regex = new RegExp(`(^|\\s|\\(|\\-)${qShort}(\\s|\\)|\\:|$)`, 'i');
                  if (regex.test(serverClean)) return true;
             }
         }
 
-        // Logic match thường cho tên dài
         return serverClean.includes(qClean) || qClean.includes(serverClean);
     });
 
@@ -222,9 +255,15 @@ builder.defineStreamHandler(async ({ type, id }) => {
             const matchedVideos = metaRes.data.meta.videos.filter(vid => {
                 const info = extractEpisodeInfo(vid.title || vid.name || "");
                 if (!info) return false;
-                if (info.s !== 0) return info.s === season && info.e === episode;
+                
+                // LOGIC GHÉP TẬP ANIME (QUAN TRỌNG)
+                // Nếu info.s = 0 (tức là chỉ tìm thấy Tập X), ta cho phép khớp với bất kỳ Season nào,
+                // miễn là Episode khớp.
+                // Vì Naruto trên server có thể là "Naruto" (ko chia season) hoặc "Naruto Season 1".
                 if (info.s === 0) return info.e === episode;
-                return false;
+                
+                // Nếu tìm thấy Season rõ ràng (S01E05) thì bắt buộc khớp Season
+                return info.s === season && info.e === episode;
             });
 
             const streams = [];
