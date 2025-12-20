@@ -16,32 +16,30 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v21",
-    version: "21.0.0",
-    name: "Phim4K VIP (Ultra Aggregation)",
-    description: "Fix Dark 4K, 10Dance, Multi-Alias Ghibli",
+    id: "com.phim4k.vip.final.v22",
+    version: "22.0.0",
+    name: "Phim4K VIP (Strict & Fixes)",
+    description: "Fix Sentimental Value, Dark vs Dark Crystal",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN ĐA BIẾN THỂ (ARRAY MAPPING) ===
-// Cho phép một phim có nhiều tên tiếng Việt khác nhau để tăng khả năng trúng
+// === 1. TỪ ĐIỂN MỞ RỘNG (V22) ===
 const VIETNAMESE_MAPPING = {
     "from": ["bẫy"],
     "bet": ["học viện đỏ đen"],
     "f1": ["f1"],
     "sisu: road to revenge": ["sisu 2"],
     
-    // Fix Chainsaw Man
+    // Fix Sentimental Value (Na Uy)
+    "sentimental value": ["giá trị tình cảm", "affeksjonsverdi"],
+
     "chainsaw man - the movie: reze arc": ["chainsaw man movie", "reze arc"],
-
-    // Fix 10 Dance (Xử lý dính liền)
     "10 dance": ["10dance", "10 dance"],
-    "sentimental value": ["sentimental value"],
 
-    // GHIBLI & ANIME (Thêm nhiều alias)
+    // GHIBLI & ANIME
     "princess mononoke": ["công chúa mononoke", "công chúa sói", "mononoke hime"],
     "ocean waves": ["những con sóng đại dương", "sóng đại dương", "ai cũng có thể nghe thấy sóng biển"],
     "the red turtle": ["rùa đỏ"],
@@ -95,19 +93,23 @@ function extractEpisodeInfo(filename) {
     return null;
 }
 
-// === HÀM KIỂM TRA LOGIC MATCH (Tách riêng để tái sử dụng) ===
+// === LOGIC MATCH NGHIÊM NGẶT HƠN (V22) ===
 function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseList, queries) {
     if (candidate.type && candidate.type !== type) return false;
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
-    // 1. KIỂM TRA NĂM
+    // 1. KIỂM TRA NĂM (Siết chặt cho Series)
     let yearMatch = false;
     if (!hasYear) yearMatch = true;
     else {
         const yearMatches = serverName.match(/\d{4}/g);
         if (yearMatches) {
-            const tolerance = (type === 'series' || originalName.toLowerCase().includes('naruto')) ? 2 : 1;
+            // Chỉ nới lỏng 2 năm nếu tên có chữ 'naruto' hoặc là Anime
+            // Còn lại Series thường chỉ cho phép lệch 1 năm để tránh 'Dark' (2017) ăn vào 2019
+            const isAnimeLoose = originalName.toLowerCase().includes('naruto'); 
+            const tolerance = isAnimeLoose ? 2 : 1;
+            
             yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= tolerance);
         } else if (candidate.releaseInfo) {
             yearMatch = candidate.releaseInfo.includes(year.toString()) 
@@ -117,41 +119,47 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     }
     if (!yearMatch) return false;
 
-    // 2. LOGIC TIẾNG VIỆT (Quyền phủ quyết)
+    // 2. LOGIC TIẾNG VIỆT (Ưu tiên cao nhất)
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
-        // Duyệt qua TẤT CẢ alias tiếng Việt
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
-            
             if (serverClean.includes(mappedClean)) {
-                // Ngoại lệ cho Sisu 2 / F1 / 10dance (không cần dấu)
                 if (['sisu 2', 'f1', '10dance'].includes(mappedVietnamese)) return true;
-                
-                // Check dấu nghiêm ngặt
-                if (containsWithAccent(serverName, mappedVietnamese)) return true;
-                
-                // Nếu clean khớp mà dấu không khớp -> Khả năng cao là phim khác (Bây/Bẫy)
-                // Tuy nhiên, vì đây là vòng lặp, ta chưa return false vội, lỡ alias khác khớp thì sao?
-                // Nhưng với logic Veto cũ: Nếu nó giống "Bây" mà mình tìm "Bẫy" -> Loại.
-                // Để an toàn: Nếu chuỗi clean khớp, ta return kết quả của việc check dấu ngay.
                 return containsWithAccent(serverName, mappedVietnamese);
             }
         }
     }
 
-    // 3. LOGIC TIẾNG ANH / TÊN NGẮN
+    // 3. LOGIC TIẾNG ANH (STRICT MODE CHO TÊN NGẮN)
     const qClean = normalizeForSearch(originalName);
     
-    // Check tên ngắn Strict
+    // Nếu tìm thấy query trong server name
+    if (serverClean.includes(qClean)) {
+        // Nếu tên phim gốc quá ngắn (ví dụ "Dark", "See", "From" - dưới 5 ký tự)
+        if (qClean.length < 5) {
+            // Bắt buộc Server Name phải BẮT ĐẦU bằng từ đó (tránh "The Dark Crystal")
+            // Hoặc là khớp hoàn toàn
+            if (serverClean === qClean) return true;
+            if (serverClean.startsWith(qClean + " ")) return true;
+            if (serverClean.startsWith(qClean + ":")) return true;
+            
+            // Nếu Server Name là "The Dark Crystal" (bắt đầu bằng "the") -> Loại
+            return false; 
+        }
+        return true;
+    }
+    
+    // Check tên ngắn trong queries (cho các case đặc biệt)
     for (const query of queries) {
         const qShort = normalizeForSearch(query);
+        // Logic biên từ (Word Boundary) cho tên ngắn
         if (qShort.length < 4) {
              const regex = new RegExp(`(^|\\s|\\(|\\-)${qShort}(\\s|\\)|\\:|$)`, 'i');
              if (regex.test(serverClean)) return true;
         }
     }
 
-    return serverClean.includes(qClean) || qClean.includes(serverClean);
+    return qClean.includes(serverClean);
 }
 
 builder.defineStreamHandler(async ({ type, id }) => {
@@ -168,11 +176,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
     let year = parseInt(meta.year);
     const hasYear = !isNaN(year); 
 
-    // === TẠO QUERIES ===
     const queries = [];
     const lowerName = originalName.toLowerCase();
     
-    // Lấy mapping (có thể là String hoặc Array)
     let mappedVietnameseList = [];
     const mappingRaw = VIETNAMESE_MAPPING[lowerName];
     if (mappingRaw) {
@@ -180,17 +186,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
         else mappedVietnameseList = [mappingRaw];
     }
 
-    // 1. Thêm tất cả tên tiếng Việt vào queries
     mappedVietnameseList.forEach(name => queries.push(name));
-    
-    // 2. Tên gốc
     queries.push(originalName);
 
-    // 3. Tên sạch
     const cleanName = normalizeForSearch(originalName);
     if (cleanName !== lowerName) queries.push(cleanName);
 
-    // 4. Fix F1, Dexter, 10 Dance
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
         const splitClean = normalizeForSearch(splitName);
@@ -199,13 +200,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
     }
     
-    // Fix "10 Dance" -> "10Dance"
-    // Nếu tên có số và khoảng trắng, thử phiên bản dính liền
     if (/\d/.test(cleanName) && cleanName.includes(" ")) {
         queries.push(cleanName.replace(/\s/g, ""));
     }
 
-    // 5. Fix "The Movie"
     const removeTheMovie = cleanName.replace(/\s+the movie$/, "").trim();
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) {
         queries.push(removeTheMovie);
@@ -217,7 +215,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
 
-    // === SEARCH SONG SONG ===
     const searchPromises = uniqueQueries.map(q => 
         axios.get(`${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(q)}.json`, 
             { headers: HEADERS, timeout: 5000 }).catch(() => null)
@@ -230,11 +227,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
             allCandidates = allCandidates.concat(res.data.metas);
         }
     });
-    // Lọc trùng ID
     allCandidates = allCandidates.filter((v,i,a)=>a.findIndex(t=>(t.id === v.id))===i);
 
-    // === AGGREGATION (GOM KẾT QUẢ) ===
-    // Thay vì find() lấy 1 cái, ta dùng filter() lấy TẤT CẢ cái khớp
+    // === AGGREGATION & FILTER ===
     const matchedCandidates = allCandidates.filter(m => 
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
@@ -244,11 +239,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     console.log(`-> TÌM THẤY ${matchedCandidates.length} KẾT QUẢ PHÙ HỢP:`);
     matchedCandidates.forEach(m => console.log(`   + ${m.name} | ID: ${m.id}`));
 
-    // === LẤY STREAM TỪ TẤT CẢ KẾT QUẢ KHỚP ===
-    // Điều này giải quyết vấn đề "Dark" (1 ID cho HD, 1 ID cho 4K)
     let allStreams = [];
-    
-    // Tạo list promises để fetch stream song song
     const streamPromises = matchedCandidates.map(async (match) => {
         const fullId = match.id;
         try {
@@ -258,7 +249,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 if (sRes.data && sRes.data.streams) {
                     return sRes.data.streams.map(s => ({
                         name: "Phim4K VIP",
-                        title: (s.title || s.name) + `\n[${match.name}]`, // Ghi chú nguồn
+                        title: s.title || s.name, 
                         url: s.url,
                         behaviorHints: { notWebReady: false, bingeGroup: "phim4k-vip" }
                     }));
@@ -271,7 +262,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const matchedVideos = metaRes.data.meta.videos.filter(vid => {
                     const info = extractEpisodeInfo(vid.title || vid.name || "");
                     if (!info) return false;
-                    if (info.s === 0) return info.e === episode; // Anime logic
+                    if (info.s === 0) return info.e === episode; 
                     return info.s === season && info.e === episode;
                 });
 
@@ -284,7 +275,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                             sRes.data.streams.forEach(s => {
                                 episodeStreams.push({
                                     name: `Phim4K S${season}E${episode}`,
-                                    title: (s.title || vid.title) + `\n[${match.name}]`,
+                                    title: s.title || vid.title,
                                     url: s.url,
                                     behaviorHints: { notWebReady: false, bingeGroup: "phim4k-vip" }
                                 });
@@ -303,11 +294,16 @@ builder.defineStreamHandler(async ({ type, id }) => {
         allStreams = allStreams.concat(streams);
     });
 
-    // Sắp xếp stream: Ưu tiên 4K > 1080p
+    // Sắp xếp ưu tiên 4K > 1080p > Thuyết minh
     allStreams.sort((a, b) => {
-        const qA = a.title.includes("4K") ? 3 : (a.title.includes("1080") ? 2 : 1);
-        const qB = b.title.includes("4K") ? 3 : (b.title.includes("1080") ? 2 : 1);
-        return qB - qA;
+        const getScore = (title) => {
+            let score = 0;
+            if (title.includes("4K") || title.includes("2160p")) score += 3;
+            if (title.includes("1080p")) score += 2;
+            if (title.toLowerCase().includes("thuyết minh") || title.toLowerCase().includes("vietsub")) score += 1;
+            return score;
+        };
+        return getScore(b.title) - getScore(a.title);
     });
 
     return { streams: allStreams };
