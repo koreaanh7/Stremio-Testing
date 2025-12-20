@@ -16,24 +16,23 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v13",
-    version: "13.0.0",
-    name: "Phim4K VIP (Dict & Strict)",
-    description: "Fix From, Lost, Ghibli, Dexter & Strict Filtering",
+    id: "com.phim4k.vip.final.v14",
+    version: "14.0.0",
+    name: "Phim4K VIP (Precision Fix)",
+    description: "Fix From, Dexter OS, Ghibli Names",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN ÁNH XẠ (Manual Mapping) ===
-// Giúp tìm ngay các phim có tên tiếng Việt hoặc tên khó
+// === 1. TỪ ĐIỂN ÁNH XẠ (Đã cập nhật chuẩn Ghibli) ===
 const TITLE_MAPPING = {
     "from": "nguồn gốc",
     "lost": "mất tích",
     "dark": "đêm lặng",
     "howl's moving castle": "lâu đài bay của pháp sư howl",
-    "the wind rises": "gió nổi",
+    "the wind rises": "gió vẫn thổi", // Đã sửa theo feedback
     "spirited away": "vùng đất linh hồn",
     "princess mononoke": "công chúa mononoke",
     "my neighbor totoro": "hàng xóm của tôi là totoro",
@@ -52,31 +51,30 @@ function normalizeTitle(title) {
         .trim();
 }
 
-// === 3. TẠO TỪ KHÓA TÌM KIẾM ===
+// === 3. TẠO TỪ KHÓA TÌM KIẾM (An toàn hơn) ===
 function getSearchQueries(originalName) {
     const clean = normalizeTitle(originalName);
     const queries = [];
 
-    // Ưu tiên 1: Kiểm tra trong từ điển MAPPING
+    // Ưu tiên 1: Kiểm tra từ điển
     const lowerOriginal = originalName.toLowerCase();
     if (TITLE_MAPPING[lowerOriginal]) {
-        queries.push(TITLE_MAPPING[lowerOriginal]); // Thêm tên tiếng Việt vào đầu danh sách
+        queries.push(TITLE_MAPPING[lowerOriginal]);
     }
 
     queries.push(originalName); // Tên gốc
     if (clean !== lowerOriginal) queries.push(clean); // Tên sạch
 
-    // Xử lý hậu tố (F1: The Movie -> F1)
+    // Xử lý hậu tố "The Movie" (Giữ lại cái này cho F1)
     const removeTheMovie = clean.replace(/\s+the movie$/, "").trim();
     if (removeTheMovie !== clean) queries.push(removeTheMovie);
 
-    // Xử lý dấu hai chấm (Chỉ dùng nếu tên dài, tránh cắt ngắn quá đà gây nhầm lẫn)
-    if (originalName.includes(":")) {
-        const splitName = originalName.split(":")[0].trim();
-        // Chỉ thêm tên ngắn nếu nó đủ dài (>3 ký tự) hoặc là F1
-        if (splitName.length > 3 || splitName.toLowerCase() === 'f1') {
-            queries.push(splitName);
-        }
+    // FIX QUAN TRỌNG CHO DEXTER: 
+    // Bỏ logic cắt dấu ":" (split colon). 
+    // "Dexter: Original Sin" sẽ KHÔNG bị biến thành "Dexter" nữa.
+    // Trừ trường hợp đặc biệt: "F1:..."
+    if (clean.startsWith("f1 ")) {
+        queries.push("f1");
     }
 
     // Dính liền (10Dance)
@@ -119,7 +117,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const hasYear = !isNaN(year); 
 
     const searchQueries = getSearchQueries(originalName);
-    console.log(`\n=== Xử lý: "${originalName}" (${hasYear ? year : 'No Year'}) | Type: ${type} ===`);
+    console.log(`\n=== Xử lý: "${originalName}" | Type: ${type} ===`);
     console.log(`-> Query list: ${JSON.stringify(searchQueries)}`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
@@ -135,26 +133,24 @@ builder.defineStreamHandler(async ({ type, id }) => {
             if (res.data && res.data.metas && res.data.metas.length > 0) {
                 
                 match = res.data.metas.find(m => {
-                    // 1. KIỂM TRA TYPE (Quan trọng: Lost series không được lấy Lost movie)
-                    // Nếu server trả về type, hãy check. Nếu server 'mù' type, bỏ qua bước này.
+                    // 1. CHECK TYPE
                     if (m.type && m.type !== type) return false;
 
                     const serverNameClean = normalizeTitle(m.name);
                     const qClean = normalizeTitle(query);
 
-                    // 2. CHECK TÊN (STRICT MODE CHO TÊN NGẮN)
+                    // 2. CHECK TÊN (FIXED FROM/LOST)
                     let nameMatch = false;
                     
-                    // Nếu từ khóa tìm kiếm quá ngắn (< 4 ký tự) như "From", "Lost"
-                    // Bắt buộc tên Server phải BẮT ĐẦU bằng từ đó, chứ không phải CHỨA nó ở giữa
-                    if (qClean.length < 4) {
-                        // Regex: Bắt đầu bằng tên phim + (kết thúc luôn HOẶC có dấu cách/kí tự lạ phía sau)
-                        // Ví dụ: Query "From" -> Khớp "From", "From (2022)", "From - SS1"
-                        // -> KHÔNG Khớp "Money Heist: From..."
+                    // Nâng ngưỡng strict mode lên 5 ký tự (để bao gồm cả từ 4 ký tự như "From")
+                    if (qClean.length <= 5) {
+                        // Regex: Bắt buộc Tên Server phải BẮT ĐẦU bằng từ khóa
+                        // "From" sẽ khớp "From (2022)"
+                        // "From" sẽ KHÔNG khớp "Money Heist: From..." (vì bắt đầu bằng M)
                         const strictRegex = new RegExp(`^${qClean}$|^${qClean}\\s|^${qClean}\\W`, 'i');
                         nameMatch = strictRegex.test(serverNameClean);
                     } else {
-                        // Tên dài thì dùng includes như bình thường
+                        // Logic cũ cho tên dài
                         nameMatch = serverNameClean.includes(qClean) || qClean.includes(serverNameClean);
                     }
 
@@ -165,7 +161,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     } else {
                         const yearMatches = m.name.match(/\d{4}/g);
                         if (yearMatches) {
-                            // Sai số +/- 2 năm
                             yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 2);
                         } else if (m.releaseInfo) {
                             yearMatch = m.releaseInfo.includes(year.toString()) 
@@ -177,14 +172,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     }
                     
                     if (nameMatch && yearMatch) {
-                        // 4. CHECK PHỤ ĐỀ (Fix Dexter)
-                        // Nếu search "Dexter" (từ split) mà kết quả là "Dexter Resurrection", 
-                        // trong khi phim gốc là "Dexter Original Sin" -> Cần cẩn thận.
-                        // Tuy nhiên, check năm thường đã loại trừ được rồi (Original Sin 2024 vs Resurrection 2025).
-                        // Code này dựa vào sai số năm <= 2, nên vẫn có rủi ro nhỏ. 
-                        // Nhưng vì ta đã ưu tiên search tên gốc "Dexter Original Sin" trước, nên nếu server có phim đúng, nó sẽ khớp trước.
-                        
-                        console.log(`   -> KHỚP (${query}): ${m.name} [Type: ${m.type || 'N/A'}]`);
+                        console.log(`   -> KHỚP (${query}): ${m.name}`);
                         return true;
                     }
                     return false;
@@ -193,7 +181,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
         } catch (e) {}
     }
 
-    if (!match) return { streams: [] };
+    if (!match) {
+        console.log("-> Không tìm thấy phim phù hợp.");
+        return { streams: [] };
+    }
 
     const fullId = match.id;
 
