@@ -18,18 +18,19 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v15",
     version: "15.0.0",
-    name: "Phim4K VIP (Accent Fix)",
-    description: "Fix From (Bẫy/Bây), Bet, Kakegurui",
+    name: "Phim4K VIP (Token Match)",
+    description: "Fix From, Bet, Short Names using Token Logic",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN (Cập nhật Bet & Kakegurui) ===
+// === 1. TỪ ĐIỂN ÁNH XẠ KÉP (QUAN TRỌNG) ===
+// Mẹo: Kết hợp cả Tiếng Việt + Tiếng Anh vào value để tìm chính xác
 const TITLE_MAPPING = {
-    "from": "bẫy",  // Sẽ dùng check có dấu
-    "bet": "kakegurui", // Map Bet sang Kakegurui để tìm thử
+    "from": "bẫy from",  // Fix: Bẫy (2022) From
+    "bet": "học viện đỏ đen bet", // Fix: Học viện đỏ đen (2025) Bet
     "the wind rises": "gió vẫn thổi",
     "the boy and the heron": "thiếu niên và chim diệc",
     "howl's moving castle": "lâu đài bay của pháp sư howl",
@@ -44,7 +45,6 @@ const TITLE_MAPPING = {
     "5 centimeters per second": "5 centimet trên giây"
 };
 
-// Hàm bỏ dấu (dùng cho tiếng Anh hoặc search lỏng)
 function normalizeTitle(title) {
     return title.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, "")
@@ -58,24 +58,23 @@ function getSearchQueries(originalName) {
     const clean = normalizeTitle(originalName);
     const queries = [];
 
+    // Ưu tiên 1: Từ điển
     const lowerOriginal = originalName.toLowerCase();
-    
-    // Mapping: Nếu có trong từ điển, đẩy lên đầu
     if (TITLE_MAPPING[lowerOriginal]) {
         queries.push(TITLE_MAPPING[lowerOriginal]);
     }
 
-    // Nếu tên gốc là "Bet", thêm cả "kakegurui" vào để search (phòng hờ server chưa đổi tên)
-    if (lowerOriginal === 'bet') {
-        queries.push("kakegurui");
-    }
-
+    // Ưu tiên 2: Tên gốc
     queries.push(originalName);
+
+    // Ưu tiên 3: Tên sạch
     if (clean !== lowerOriginal) queries.push(clean);
 
+    // Xử lý hậu tố
     const removeTheMovie = clean.replace(/\s+the movie$/, "").trim();
     if (removeTheMovie !== clean) queries.push(removeTheMovie);
 
+    // Xử lý dấu hai chấm (Dexter, F1)
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
         if (splitName.length > 3 || splitName.toLowerCase() === 'f1') {
@@ -87,6 +86,15 @@ function getSearchQueries(originalName) {
     if (noSpace !== clean) queries.push(noSpace);
 
     return [...new Set(queries)];
+}
+
+// === 3. HÀM CHECK KHỚP TỪNG TỪ (TOKEN MATCH) ===
+// Giúp tìm "Bẫy From" khớp với "Bẫy (2022) From"
+function isTokenMatch(query, targetName) {
+    const qTokens = normalizeTitle(query).split(" ");
+    const tClean = normalizeTitle(targetName);
+    // Tất cả các từ trong query phải xuất hiện trong targetName
+    return qTokens.every(token => tClean.includes(token));
 }
 
 async function getCinemetaMetadata(type, imdbId) {
@@ -123,8 +131,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const hasYear = !isNaN(year); 
 
     const searchQueries = getSearchQueries(originalName);
-    // Lấy tên map gốc (có dấu) để check
-    const mappedTitleRaw = TITLE_MAPPING[originalName.toLowerCase()]; 
+    
+    // Check xem có dùng Mapping không
+    const mappedTitle = TITLE_MAPPING[originalName.toLowerCase()];
 
     console.log(`\n=== Xử lý: "${originalName}" (${year}) | Type: ${type} ===`);
     console.log(`-> Queries: ${JSON.stringify(searchQueries)}`);
@@ -144,61 +153,50 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 match = res.data.metas.find(m => {
                     if (m.type && m.type !== type) return false;
 
-                    const rawServerName = m.name.toLowerCase(); // Tên có dấu của server
                     const serverNameClean = normalizeTitle(m.name);
                     const qClean = normalizeTitle(query);
 
-                    // --- CHECK 1: TÊN (NÂNG CẤP CHECK DẤU) ---
+                    // --- LOGIC SO KHỚP TÊN ---
                     let nameMatch = false;
 
-                    // A. Trường hợp đặc biệt: FROM (Bẫy)
-                    // Nếu mapping là "bẫy", ta bắt buộc server name phải chứa chữ "bẫy" (có dấu)
-                    // để tránh nhầm với "bây" (trong "bây giờ")
-                    if (mappedTitleRaw && mappedTitleRaw === "bẫy") {
-                         // Check chính xác từ "bẫy" hoặc "From" đứng một mình
-                         const hasBay = rawServerName.includes("bẫy"); 
-                         const hasExactFrom = /\bfrom\b/.test(rawServerName); // Regex: chữ From phải đứng riêng
-                         
-                         nameMatch = hasBay || hasExactFrom;
+                    // A. Nếu query này đến từ MAPPING (Ví dụ: "bẫy from")
+                    if (mappedTitle && query === mappedTitle) {
+                        // Dùng thuật toán Token Match: "bẫy from" khớp "bẫy (2022) from"
+                        nameMatch = isTokenMatch(query, m.name);
                     }
-                    // B. Trường hợp dùng Mapping khác (Gió nổi,...) -> Check chứa (có dấu càng tốt)
-                    else if (mappedTitleRaw && normalizeTitle(mappedTitleRaw) === qClean) {
-                         nameMatch = rawServerName.includes(mappedTitleRaw) || serverNameClean.includes(qClean);
-                    }
-                    // C. Trường hợp tên ngắn (< 4 ký tự) như "Bet", "F1"
+                    // B. Nếu query quá ngắn (<4 ký tự) như "Bet", "F1"
                     else if (qClean.length < 4) {
+                        // Phải bắt đầu chính xác hoặc bằng nhau
                         const strictStart = new RegExp(`^${qClean}(\\s|\\W|$)`, 'i').test(serverNameClean);
                         nameMatch = strictStart;
-                    } 
-                    // D. Tên thường
+                    }
+                    // C. Bình thường
                     else {
                         nameMatch = serverNameClean.includes(qClean) || qClean.includes(serverNameClean);
                     }
 
-                    if (!nameMatch) return false;
+                    // --- LOGIC DEXTER FIX (Subtitle Conflict) ---
+                    if (originalName.includes(":") && qClean.length < cleanOriginalName.length) {
+                         const originalSuffix = cleanOriginalName.replace(qClean, "").trim();
+                         // Nếu hậu tố đủ dài và server name KHÔNG chứa hậu tố đó -> Check kỹ năm
+                         if (originalSuffix.length > 3 && !serverNameClean.includes(originalSuffix)) {
+                             // Nếu sai số năm > 1 thì bỏ qua luôn (Tránh Original Sin lấy nhầm Resurrection)
+                             if (Math.abs(parseInt(m.releaseInfo || "0") - year) > 1) return false;
+                         }
+                    }
 
-                    // --- CHECK 2: NĂM (NÂNG CẤP CHO KAKEGURUI) ---
+                    // --- LOGIC SO KHỚP NĂM ---
                     let yearMatch = false;
                     if (!hasYear) {
                         yearMatch = true;
                     } else {
-                        // Lấy tất cả năm trong tên server
                         const yearMatches = m.name.match(/\d{4}/g);
-                        
-                        // FIX KAKEGURUI: Nếu tên là "Kakegurui" (dễ trùng Anime/Live Action)
-                        // Ta giảm sai số năm xuống 0 hoặc 1 (ngặt nghèo hơn) thay vì 2
-                        const isRiskyTitle = qClean.includes("kakegurui") || qClean.includes("bet");
-                        const tolerance = isRiskyTitle ? 1 : 2; 
-
                         if (yearMatches) {
-                            yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= tolerance);
+                            yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 2);
                         } else if (m.releaseInfo) {
-                            // Check release info
-                            for (let i = 0; i <= tolerance; i++) {
-                                if (m.releaseInfo.includes((year + i).toString()) || m.releaseInfo.includes((year - i).toString())) {
-                                    yearMatch = true; break;
-                                }
-                            }
+                            yearMatch = m.releaseInfo.includes(year.toString()) 
+                                     || m.releaseInfo.includes((year-1).toString()) 
+                                     || m.releaseInfo.includes((year+1).toString());
                         } else {
                             yearMatch = true; 
                         }
