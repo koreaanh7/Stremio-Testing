@@ -16,17 +16,17 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v19",
-    version: "19.0.0",
-    name: "Phim4K VIP (Strict Veto)",
-    description: "Fix From/Bet/F1 with Veto Logic",
+    id: "com.phim4k.vip.final.v20",
+    version: "20.0.0",
+    name: "Phim4K VIP (Speed)",
+    description: "Best Logic + Fast Search (Cascade Mode)",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN ===
+// === TỪ ĐIỂN ===
 const VIETNAMESE_MAPPING = {
     "from": "bẫy",  
     "bet": "học viện đỏ đen", 
@@ -74,6 +74,48 @@ function extractEpisodeInfo(filename) {
     return null;
 }
 
+// === HÀM LỌC CHUNG (Dùng cho cả 2 Pha) ===
+function findBestMatch(candidates, type, originalName, year, mappedVietnamese, queryList) {
+    const hasYear = !isNaN(year);
+    
+    return candidates.find(m => {
+        if (m.type && m.type !== type) return false;
+        const serverName = m.name; 
+        const serverClean = normalizeForSearch(serverName);
+        
+        // 1. CHECK NĂM
+        let yearMatch = false;
+        if (!hasYear) yearMatch = true;
+        else {
+            const yearMatches = serverName.match(/\d{4}/g);
+            if (yearMatches) yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 1);
+            else if (m.releaseInfo) yearMatch = m.releaseInfo.includes(year.toString()) || m.releaseInfo.includes((year-1).toString()) || m.releaseInfo.includes((year+1).toString());
+            else yearMatch = true; 
+        }
+        if (!yearMatch) return false;
+
+        // 2. CHECK TIẾNG VIỆT (QUYỀN PHỦ QUYẾT)
+        if (mappedVietnamese) {
+            const mappedClean = normalizeForSearch(mappedVietnamese);
+            if (serverClean.includes(mappedClean)) {
+                if (!containsWithAccent(serverName, mappedVietnamese)) return false; // Sai dấu -> Loại
+                return true; // Đúng dấu -> Lấy
+            }
+        }
+
+        // 3. CHECK TIẾNG ANH / F1
+        const qClean = normalizeForSearch(originalName);
+        for (const query of queryList) {
+            const qShort = normalizeForSearch(query);
+            if (qShort.length < 4) {
+                 const regex = new RegExp(`(^|\\s|\\(|\\-)${qShort}(\\s|\\)|\\:|$)`, 'i');
+                 if (regex.test(serverClean)) return true;
+            }
+        }
+        return serverClean.includes(qClean) || qClean.includes(serverClean);
+    });
+}
+
 builder.defineStreamHandler(async ({ type, id }) => {
     if (!id.startsWith("tt")) return { streams: [] };
 
@@ -85,121 +127,83 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (!meta) return { streams: [] };
 
     const originalName = meta.name;
-    let year = parseInt(meta.year);
-    const hasYear = !isNaN(year); 
+    const year = parseInt(meta.year);
+    const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
+    
+    console.log(`\n=== Xử lý: "${originalName}" (${year}) | Type: ${type} ===`);
 
-    // === TẠO QUERY (Có fix F1) ===
-    const queries = [];
     const lowerName = originalName.toLowerCase();
     const mappedVietnamese = VIETNAMESE_MAPPING[lowerName];
-
-    if (mappedVietnamese) queries.push(mappedVietnamese); 
-    queries.push(originalName);
-
-    const cleanName = normalizeForSearch(originalName);
-    if (cleanName !== lowerName) queries.push(cleanName);
-
-    if (originalName.includes(":")) {
-        const splitName = originalName.split(":")[0].trim();
-        const splitClean = normalizeForSearch(splitName);
-        // Fix F1: Chấp nhận tên ngắn nếu là f1
-        if (splitClean.length > 3 || splitClean === 'f1') {
-            queries.push(splitName);
-        }
-    }
-
-    const removeTheMovie = cleanName.replace(/\s+the movie$/, "").trim();
-    if (removeTheMovie !== cleanName && removeTheMovie.length > 0) {
-        queries.push(removeTheMovie);
-    }
-
-    const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý: "${originalName}" (${year}) | Type: ${type} ===`);
-    console.log(`-> Queries: ${JSON.stringify(uniqueQueries)}`);
-
-    const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     let match = null;
 
-    // === SEARCH SONG SONG ===
-    const searchPromises = uniqueQueries.map(q => 
-        axios.get(`${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(q)}.json`, 
-            { headers: HEADERS, timeout: 5000 }).catch(() => null)
-    );
-
-    const responses = await Promise.all(searchPromises);
-    let allCandidates = [];
-    responses.forEach(res => {
-        if (res && res.data && res.data.metas) {
-            allCandidates = allCandidates.concat(res.data.metas);
-        }
-    });
-
-    // Lọc trùng
-    allCandidates = allCandidates.filter((v,i,a)=>a.findIndex(t=>(t.id === v.id))===i);
-
-    // === VERIFY LOGIC (VETO PROTOCOL) ===
-    match = allCandidates.find(m => {
-        if (m.type && m.type !== type) return false;
-        const serverName = m.name; 
-        const serverClean = normalizeForSearch(serverName);
-        
-        // 1. KIỂM TRA NĂM (BẮT BUỘC)
-        let yearMatch = false;
-        if (!hasYear) yearMatch = true;
-        else {
-            const yearMatches = serverName.match(/\d{4}/g);
-            if (yearMatches) yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= 1);
-            else if (m.releaseInfo) yearMatch = m.releaseInfo.includes(year.toString()) || m.releaseInfo.includes((year-1).toString()) || m.releaseInfo.includes((year+1).toString());
-            else yearMatch = true; 
-        }
-        if (!yearMatch) return false;
-
-        // 2. LOGIC TÊN TIẾNG VIỆT (QUYỀN PHỦ QUYẾT)
-        // Nếu phim có Mapping Tiếng Việt
-        if (mappedVietnamese) {
-            const mappedClean = normalizeForSearch(mappedVietnamese);
+    // ==========================================
+    // PHA 1: TÌM KIẾM NHANH (Bằng Mapping Tiếng Việt)
+    // ==========================================
+    if (mappedVietnamese) {
+        console.log(`[Pha 1] Tìm nhanh bằng tên Việt: "${mappedVietnamese}"`);
+        try {
+            const searchUrl = `${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(mappedVietnamese)}.json`;
+            const res = await axios.get(searchUrl, { headers: HEADERS, timeout: 4000 });
             
-            // Nếu tên Server CÓ CHỨA từ khóa tiếng Việt (dù có dấu hay không)
-            // Ví dụ: server "Bây giờ" (clean: bay gio), mapping "bẫy" (clean: bay)
-            // -> Điều kiện này True
-            if (serverClean.includes(mappedClean)) {
-                
-                // THÌ BẮT BUỘC PHẢI KHỚP DẤU
-                // "Bây giờ" KHÔNG chứa "bẫy" -> False -> RETURN FALSE NGAY (Không check tiếp logic dưới)
-                if (!containsWithAccent(serverName, mappedVietnamese)) {
-                    return false; // CHẶN ĐỨNG SAI SÓT
-                }
-                
-                // Nếu khớp dấu -> LẤY LUÔN
-                return true;
+            if (res.data && res.data.metas) {
+                // Dùng hàm lọc chung, queryList rỗng vì ở pha này ta tin tưởng Mapping
+                match = findBestMatch(res.data.metas, type, originalName, year, mappedVietnamese, []);
             }
-            // Nếu server hoàn toàn không chứa từ khóa Việt (ví dụ tên server là "From (2022)"),
-            // thì bỏ qua block này, chạy tiếp xuống logic tiếng Anh.
-        }
+        } catch (e) { console.log("Lỗi pha 1:", e.message); }
+    }
 
-        // 3. LOGIC TIẾNG ANH / TÊN NGẮN
-        const qClean = normalizeForSearch(originalName);
+    if (match) {
+        console.log(`-> KHỚP NGAY PHA 1: ${match.name}`);
+    } else {
+        // ==========================================
+        // PHA 2: TÌM KIẾM DỰ PHÒNG (Nếu Pha 1 thất bại hoặc không có Mapping)
+        // ==========================================
+        const queries = [];
+        queries.push(originalName); // Tên gốc (From)
         
-        // Logic cho từ khóa ngắn (F1, Bet, From)
-        for (const query of uniqueQueries) {
-            const qShort = normalizeForSearch(query);
-            if (qShort.length < 4) {
-                 // Phải bắt đầu bằng từ khóa đó
-                 const regex = new RegExp(`(^|\\s|\\(|\\-)${qShort}(\\s|\\)|\\:|$)`, 'i');
-                 if (regex.test(serverClean)) return true;
+        const cleanName = normalizeForSearch(originalName);
+        if (cleanName !== lowerName) queries.push(cleanName);
+
+        if (originalName.includes(":")) {
+            const splitName = originalName.split(":")[0].trim();
+            const splitClean = normalizeForSearch(splitName);
+            // Fix F1
+            if (splitClean.length > 3 || splitClean === 'f1') {
+                queries.push(splitName);
             }
         }
 
-        // Logic match thường cho tên dài
-        return serverClean.includes(qClean) || qClean.includes(serverClean);
-    });
+        const removeTheMovie = cleanName.replace(/\s+the movie$/, "").trim();
+        if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
+
+        const uniqueQueries = [...new Set(queries)];
+        console.log(`[Pha 2] Tìm tên gốc/clean: ${JSON.stringify(uniqueQueries)}`);
+
+        // Search song song các query này
+        const searchPromises = uniqueQueries.map(q => 
+            axios.get(`${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(q)}.json`, 
+                { headers: HEADERS, timeout: 6000 }).catch(() => null)
+        );
+
+        const responses = await Promise.all(searchPromises);
+        let allCandidates = [];
+        responses.forEach(res => {
+            if (res && res.data && res.data.metas) allCandidates = allCandidates.concat(res.data.metas);
+        });
+        
+        // Lọc trùng
+        allCandidates = allCandidates.filter((v,i,a)=>a.findIndex(t=>(t.id === v.id))===i);
+        
+        // Chạy lại hàm lọc
+        match = findBestMatch(allCandidates, type, originalName, year, mappedVietnamese, uniqueQueries);
+        
+        if (match) console.log(`-> KHỚP PHA 2: ${match.name}`);
+    }
 
     if (!match) return { streams: [] };
 
-    const fullId = match.id;
-    console.log(`-> KHỚP: ${match.name} | ID: ${fullId}`);
-
     // === LẤY STREAM ===
+    const fullId = match.id;
     try {
         if (type === 'movie') {
             const streamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(fullId)}.json`;
