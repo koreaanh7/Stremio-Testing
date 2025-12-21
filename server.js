@@ -16,18 +16,22 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v25",
-    version: "25.0.0",
-    name: "Phim4K VIP (Collection Master)",
-    description: "Fix Harry Potter Collection & Exact Stream Mapping",
+    id: "com.phim4k.vip.final.v26",
+    version: "26.0.0",
+    name: "Phim4K VIP (Number-Word Fix)",
+    description: "Fix 12 Monkeys, Harry Potter, F1 & Precision Logic",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MỞ RỘNG (BAO GỒM HP) ===
+// === 1. TỪ ĐIỂN MỞ RỘNG ===
 const VIETNAMESE_MAPPING = {
+    // --- FIX MỚI (SỐ vs CHỮ) ---
+    "12 monkeys": ["12 con khỉ", "twelve monkeys"], // Fix 12 vs Twelve
+
+    // --- CÁC MAPPING CŨ (GIỮ NGUYÊN) ---
     "elf": ["chàng tiên giáng trần", "elf"],
     "f1": ["f1"],
     "f1: the movie": ["f1"],
@@ -35,8 +39,7 @@ const VIETNAMESE_MAPPING = {
     "dark": ["đêm lặng"],
     "el camino: a breaking bad movie": ["el camino", "tập làm người xấu movie"],
     
-    // === HARRY POTTER SPECIAL MAPPING (Map tất cả về Collection) ===
-    // Lưu ý: Server viết sai chính tả là "Colection" -> Map đúng cái sai đó
+    // Harry Potter (Giữ nguyên typo 'Colection' của server)
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
     "harry potter and the chamber of secrets": ["harry potter colection"],
@@ -47,7 +50,6 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 1": ["harry potter colection"],
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 
-    // --- MAPPING CŨ ---
     "from": ["bẫy"],
     "bet": ["học viện đỏ đen"],
     "sisu: road to revenge": ["sisu 2"],
@@ -75,7 +77,6 @@ const VIETNAMESE_MAPPING = {
 };
 
 // === HARRY POTTER KEYWORD FILTER ===
-// Dùng để lọc đúng file stream trong Collection
 function getHPKeywords(originalName) {
     const name = originalName.toLowerCase();
     if (name.includes("sorcerer") || name.includes("philosopher")) return ["philosopher", "sorcerer", "hòn đá", " 1 "];
@@ -113,7 +114,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
-    // FIX ĐẶC BIỆT CHO HP COLLECTION: Luôn chấp nhận nếu tên server là "Harry Potter Colection"
+    // HP Collection Fix
     if (serverClean.includes("harry potter colection")) {
          if (originalName.toLowerCase().includes("harry potter")) return true;
     }
@@ -132,7 +133,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         } else yearMatch = true;
     }
     
-    // Nếu là HP Collection thì bỏ qua check năm (vì collection thường để năm mới nhất hoặc năm đầu)
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     
     if (!yearMatch) return false;
@@ -202,7 +202,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v25): "${originalName}" (${year}) | Type: ${type} ===`);
+    console.log(`\n=== Xử lý (v26): "${originalName}" (${year}) | Type: ${type} ===`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -221,7 +221,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
 
-    // Ưu tiên năm chính xác (nhưng bỏ qua logic này nếu là Harry Potter Collection vì nó gộp nhiều năm)
+    // Filter Exact Year (Skip if HP)
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
@@ -233,8 +233,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
     matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
 
     let allStreams = [];
-    
-    // === CHUẨN BỊ BỘ TỪ KHÓA LỌC HARRY POTTER ===
     const hpKeywords = getHPKeywords(originalName);
 
     const streamPromises = matchedCandidates.map(async (match) => {
@@ -243,23 +241,17 @@ builder.defineStreamHandler(async ({ type, id }) => {
             if (type === 'movie') {
                 const streamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(fullId)}.json`;
                 const sRes = await axios.get(streamUrl, { headers: HEADERS });
-                
                 if (sRes.data && sRes.data.streams) {
                     let streams = sRes.data.streams;
 
-                    // === LOGIC LỌC HARRY POTTER ===
-                    // Nếu là HP, phải lọc stream theo keywords của từng phần
+                    // HP Stream Filter
                     if (isHarryPotter && hpKeywords) {
                         streams = streams.filter(s => {
                             const sTitle = (s.title || s.name || "").toLowerCase();
-                            // Phải chứa ít nhất 1 keyword của phần phim đó
                             const hasKeyword = hpKeywords.some(kw => sTitle.includes(kw));
-                            
-                            // Check kỹ phần 1 vs phần 2 cho Deathly Hallows
                             if (hpKeywords.includes("part 1")) {
                                 if (sTitle.includes("part 2") || sTitle.includes("pt.2")) return false;
                             }
-                            
                             return hasKeyword;
                         });
                     }
@@ -291,6 +283,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     if (sRes.data && sRes.data.streams) {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
+                            // Strict Stream Filter (Season Check)
                             const streamInfo = extractEpisodeInfo(streamTitle);
                             if (streamInfo && streamInfo.s !== 0) {
                                 if (streamInfo.s !== season || streamInfo.e !== episode) return;
