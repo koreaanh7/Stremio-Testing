@@ -19,42 +19,39 @@ const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v25",
     version: "25.0.0",
     name: "Phim4K VIP (Collection Master)",
-    description: "Fix Harry Potter Collection & Collections Logic",
+    description: "Fix Harry Potter Collection & Precision Filter",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MAPPING (Cập nhật Harry Potter) ===
+// === 1. TỪ ĐIỂN MỞ RỘNG (UPDATE HARRY POTTER) ===
 const VIETNAMESE_MAPPING = {
-    // --- HARRY POTTER COLLECTION MAPPING ---
-    // Mẹo: Map tất cả các phần về "harry potter collection"
-    "harry potter and the sorcerer's stone": ["harry potter collection", "hòn đá phù thủy"],
-    "harry potter and the philosopher's stone": ["harry potter collection", "hòn đá phù thủy"],
-    "harry potter and the chamber of secrets": ["harry potter collection", "phòng chứa bí mật"],
-    "harry potter and the prisoner of azkaban": ["harry potter collection", "tù nhân ngục azkaban"],
-    "harry potter and the goblet of fire": ["harry potter collection", "chiếc cốc lửa"],
-    "harry potter and the order of the phoenix": ["harry potter collection", "hội phượng hoàng"],
-    "harry potter and the half-blood prince": ["harry potter collection", "hoàng tử lai"],
-    "harry potter and the deathly hallows: part 1": ["harry potter collection", "bảo bối tử thần"],
-    "harry potter and the deathly hallows: part 2": ["harry potter collection", "bảo bối tử thần"],
-    "harry potter and the deathly hallows": ["harry potter collection"], // Case gộp
+    // --- HARRY POTTER SPECIAL ---
+    "harry potter and the sorcerer's stone": ["harry potter colection"],
+    "harry potter and the philosopher's stone": ["harry potter colection"],
+    "harry potter and the chamber of secrets": ["harry potter colection"],
+    "harry potter and the prisoner of azkaban": ["harry potter colection"],
+    "harry potter and the goblet of fire": ["harry potter colection"],
+    "harry potter and the order of the phoenix": ["harry potter colection"],
+    "harry potter and the half-blood prince": ["harry potter colection"],
+    "harry potter and the deathly hallows: part 1": ["harry potter colection"],
+    "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 
-    // --- CÁC FIX CŨ ---
+    // --- CÁC MAPPING KHÁC ---
     "elf": ["chàng tiên giáng trần", "elf"],
     "f1": ["f1"],
     "f1: the movie": ["f1"],
     "sentimental value": ["giá trị tình cảm", "affeksjonsverdi"],
     "dark": ["đêm lặng"],
     "el camino: a breaking bad movie": ["el camino", "tập làm người xấu movie"],
+    
     "from": ["bẫy"],
     "bet": ["học viện đỏ đen"],
     "sisu: road to revenge": ["sisu 2"],
     "chainsaw man - the movie: reze arc": ["chainsaw man movie", "reze arc"],
     "10 dance": ["10dance", "10 dance"],
-    
-    // GHIBLI & ANIME
     "princess mononoke": ["công chúa mononoke", "mononoke hime"],
     "ocean waves": ["những con sóng đại dương", "sóng đại dương"],
     "the red turtle": ["rùa đỏ"],
@@ -84,10 +81,6 @@ function normalizeForSearch(title) {
         .trim();
 }
 
-function containsWithAccent(fullString, subString) {
-    return fullString.toLowerCase().includes(subString.toLowerCase());
-}
-
 async function getCinemetaMetadata(type, imdbId) {
     try {
         const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${imdbId}.json`);
@@ -111,21 +104,14 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
-    // === NEW LOGIC v25: COLLECTION BYPASS ===
-    // Nếu kết quả tìm thấy là "Collection" VÀ phim gốc là Harry Potter (hoặc nằm trong list mapping đặc biệt)
-    // -> BỎ QUA check năm và check tên ngặt nghèo.
-    const isCollection = serverClean.includes("collection") || serverClean.includes("tron bo");
-    const isHarryPotter = normalizeForSearch(originalName).includes("harry potter");
-    
-    if (isCollection && isHarryPotter) {
-        // Chỉ cần tên server có chứa "harry potter" là duyệt
-        if (serverClean.includes("harry potter")) return true;
-    }
+    // === HARRY POTTER BYPASS ===
+    // Nếu tên server chứa keyword đặc biệt này, BỎ QUA kiểm tra năm
+    const isHarryPotterCollection = serverClean.includes("harry potter colection");
 
-    // --- LOGIC THƯỜNG (Giữ nguyên v24) ---
     let yearMatch = false;
-    if (!hasYear) yearMatch = true;
-    else {
+    if (!hasYear || isHarryPotterCollection) { // Bypass year check cho HP
+        yearMatch = true; 
+    } else {
         const yearMatches = serverName.match(/\d{4}/g);
         if (yearMatches) {
             const tolerance = (type === 'series' || originalName.toLowerCase().includes('naruto')) ? 2 : 1;
@@ -138,6 +124,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     }
     if (!yearMatch) return false;
 
+    // Check Alias
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
@@ -145,6 +132,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         }
     }
 
+    // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
         if (qClean.length <= 4) {
@@ -163,7 +151,9 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
 function checkExactYear(candidate, targetYear) {
     const serverName = candidate.name;
     const yearMatches = serverName.match(/\d{4}/g);
-    if (yearMatches) return yearMatches.some(y => parseInt(y) === targetYear);
+    if (yearMatches) {
+        return yearMatches.some(y => parseInt(y) === targetYear);
+    }
     if (candidate.releaseInfo) return candidate.releaseInfo.includes(targetYear.toString());
     return false;
 }
@@ -185,14 +175,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const queries = [];
     const lowerName = originalName.toLowerCase();
     
-    // Mapping Logic
     let mappedVietnameseList = [];
-    // Normalize key before lookup to handle slight variations
-    const mappingRaw = VIETNAMESE_MAPPING[lowerName] || VIETNAMESE_MAPPING[normalizeForSearch(originalName)];
-    
+    const mappingRaw = VIETNAMESE_MAPPING[lowerName];
     if (mappingRaw) mappedVietnameseList = Array.isArray(mappingRaw) ? mappingRaw : [mappingRaw];
+
     mappedVietnameseList.forEach(name => queries.push(name));
-    
     queries.push(originalName);
     const cleanName = normalizeForSearch(originalName);
     if (cleanName !== lowerName) queries.push(cleanName);
@@ -227,12 +214,15 @@ builder.defineStreamHandler(async ({ type, id }) => {
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
 
-    // === LOGIC LỌC NĂM (V24+V25) ===
-    // Chỉ áp dụng lọc năm khắt khe nếu KHÔNG PHẢI là Harry Potter Collection
-    const isHarryPotter = cleanName.includes("harry potter");
-    if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
+    // === LOGIC LỌC NĂM CHÍNH XÁC (v24) CÓ NGOẠI LỆ CHO HARRY POTTER ===
+    // Nếu tìm thấy "Harry Potter Colection", KHÔNG được lọc theo năm.
+    const foundHPCollection = matchedCandidates.some(m => normalizeForSearch(m.name).includes("harry potter colection"));
+
+    if (hasYear && matchedCandidates.length > 1 && !foundHPCollection) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
-        if (exactMatches.length > 0) matchedCandidates = exactMatches;
+        if (exactMatches.length > 0) {
+            matchedCandidates = exactMatches;
+        }
     }
 
     if (cleanName.length <= 5 && matchedCandidates.length > 1) {
@@ -242,7 +232,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     }
 
     if (matchedCandidates.length === 0) return { streams: [] };
-    console.log(`-> KẾT QUẢ CUỐI CÙNG:`);
+    console.log(`-> TÌM THẤY ${matchedCandidates.length} KẾT QUẢ:`);
     matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
 
     let allStreams = [];
@@ -281,7 +271,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                             const streamTitle = s.title || s.name || "";
                             const streamInfo = extractEpisodeInfo(streamTitle);
                             if (streamInfo && streamInfo.s !== 0) {
-                                if (streamInfo.s !== season || streamInfo.e !== episode) return;
+                                if (streamInfo.s !== season || streamInfo.e !== episode) return; 
                             }
                             episodeStreams.push({
                                 name: `Phim4K S${season}E${episode}`,
