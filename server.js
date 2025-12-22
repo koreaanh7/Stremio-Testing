@@ -18,20 +18,21 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v26",
     version: "26.0.0",
-    name: "Phim4K VIP (Number-Word Fix)",
-    description: "Fix 12 Monkeys, Harry Potter, F1 & Precision Logic",
+    name: "Phim4K VIP (Dictionary Update)",
+    description: "Fix 12 Monkeys, It (2017), HP & Short Titles",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MỞ RỘNG ===
+// === 1. TỪ ĐIỂN MỞ RỘNG (ALL FIXES) ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX MỚI (SỐ vs CHỮ) ---
-    "12 monkeys": ["12 con khỉ", "twelve monkeys"], // Fix 12 vs Twelve
+    // --- NEW FIX v26 ---
+    "12 monkeys": ["12 con khỉ", "twelve monkeys"],
+    "it": ["gã hề ma quái", "it"], // Map để bypass check độ dài
 
-    // --- CÁC MAPPING CŨ (GIỮ NGUYÊN) ---
+    // --- FIX CŨ ---
     "elf": ["chàng tiên giáng trần", "elf"],
     "f1": ["f1"],
     "f1: the movie": ["f1"],
@@ -39,7 +40,7 @@ const VIETNAMESE_MAPPING = {
     "dark": ["đêm lặng"],
     "el camino: a breaking bad movie": ["el camino", "tập làm người xấu movie"],
     
-    // Harry Potter (Giữ nguyên typo 'Colection' của server)
+    // === HARRY POTTER MAPPING ===
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
     "harry potter and the chamber of secrets": ["harry potter colection"],
@@ -50,6 +51,7 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 1": ["harry potter colection"],
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 
+    // --- ANIME & KHÁC ---
     "from": ["bẫy"],
     "bet": ["học viện đỏ đen"],
     "sisu: road to revenge": ["sisu 2"],
@@ -114,11 +116,12 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
-    // HP Collection Fix
+    // FIX HP COLLECTION
     if (serverClean.includes("harry potter colection")) {
          if (originalName.toLowerCase().includes("harry potter")) return true;
     }
 
+    // YEAR CHECK
     let yearMatch = false;
     if (!hasYear) yearMatch = true;
     else {
@@ -132,11 +135,10 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
                      || candidate.releaseInfo.includes((year+1).toString());
         } else yearMatch = true;
     }
-    
     if (serverClean.includes("harry potter colection")) yearMatch = true;
-    
     if (!yearMatch) return false;
 
+    // VIETNAMESE & MAPPING CHECK (Ưu tiên cao nhất - Bỏ qua check độ dài)
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
@@ -144,11 +146,15 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         }
     }
 
+    // ENGLISH QUERY CHECK
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
+        // Logic tên ngắn <= 4 ký tự
         if (qClean.length <= 4) {
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
             if (strictRegex.test(serverClean)) {
+                // Chỉ check độ dài nếu KHÔNG khớp mapping tiếng Việt
+                // (Vì "It" đã khớp "Gã hề ma quái" ở trên nên sẽ ko chạy xuống đây, an toàn)
                 if (serverClean.length <= qClean.length * 7) return true;
             }
         } else {
@@ -221,7 +227,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
 
-    // Filter Exact Year (Skip if HP)
+    // Ưu tiên năm chính xác
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
@@ -241,17 +247,16 @@ builder.defineStreamHandler(async ({ type, id }) => {
             if (type === 'movie') {
                 const streamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(fullId)}.json`;
                 const sRes = await axios.get(streamUrl, { headers: HEADERS });
+                
                 if (sRes.data && sRes.data.streams) {
                     let streams = sRes.data.streams;
-
-                    // HP Stream Filter
+                    
+                    // HP Filter
                     if (isHarryPotter && hpKeywords) {
                         streams = streams.filter(s => {
                             const sTitle = (s.title || s.name || "").toLowerCase();
                             const hasKeyword = hpKeywords.some(kw => sTitle.includes(kw));
-                            if (hpKeywords.includes("part 1")) {
-                                if (sTitle.includes("part 2") || sTitle.includes("pt.2")) return false;
-                            }
+                            if (hpKeywords.includes("part 1") && (sTitle.includes("part 2") || sTitle.includes("pt.2"))) return false;
                             return hasKeyword;
                         });
                     }
@@ -283,7 +288,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     if (sRes.data && sRes.data.streams) {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
-                            // Strict Stream Filter (Season Check)
                             const streamInfo = extractEpisodeInfo(streamTitle);
                             if (streamInfo && streamInfo.s !== 0) {
                                 if (streamInfo.s !== season || streamInfo.e !== episode) return;
