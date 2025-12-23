@@ -16,10 +16,10 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v27",
-    version: "27.0.0",
-    name: "Phim4K VIP (Exactitude Architect)",
-    description: "Fix From/Baymax, Oppenheimer Doc, Dexter Spin-offs",
+    id: "com.phim4k.vip.final.v28",
+    version: "28.0.0",
+    name: "Phim4K VIP (Golden Match)",
+    description: "Fix Oppenheimer Exact Match & Parentheses Issues",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -29,7 +29,7 @@ const builder = new addonBuilder({
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
     // --- FIX LOGIC MỚI ---
-    "from": ["bẫy"], // Logic v27 sẽ chặn việc Bẫy -> Bay -> Baymax
+    "from": ["bẫy"], 
     "dexter: original sin": ["dexter original sin", "dexter trọng tội", "dexter sát thủ"],
     "oppenheimer": ["oppenheimer"], 
 
@@ -101,10 +101,12 @@ function getHPKeywords(originalName) {
     return null;
 }
 
+// === FIX QUAN TRỌNG V28: NORMALIZATION MẠNH HƠN ===
 function normalizeForSearch(title) {
     return title.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, "") 
-        .replace(/['":\-.]/g, " ") 
+        // Thêm () [] {} vào danh sách loại bỏ để so sánh chính xác hơn
+        .replace(/['":\-.()\[\]]/g, " ") 
         .replace(/\s+/g, " ")
         .trim();
 }
@@ -145,13 +147,10 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // === LOGIC V27 FIX "BẪY" (FROM) ===
+    // Fix "Bẫy" (From) - Regex Word Boundary
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
-            
-            // Nếu từ khóa map quá ngắn (<= 3 ký tự, VD: "Bẫy" -> "bay"), dùng Regex bắt buộc Word Boundary
-            // Tránh "bay" khớp với "baymax"
             if (mappedClean.length <= 3) {
                 const strictRegex = new RegExp(`(^|\\s|\\W)${mappedClean}($|\\s|\\W)`, 'i');
                 if (strictRegex.test(serverClean)) return true;
@@ -184,34 +183,15 @@ function checkExactYear(candidate, targetYear) {
     return false;
 }
 
-// === LOGIC V27 MỚI: CHECK SUBTITLE (FIX DEXTER) ===
 function passesSubtitleCheck(candidateName, originalName, queries) {
     const cleanOrig = normalizeForSearch(originalName);
     const cleanCand = normalizeForSearch(candidateName);
-    
-    // Nếu tên gốc có cấu trúc "Title: Subtitle" (VD: Dexter: Original Sin)
     if (originalName.includes(":")) {
         const parts = originalName.split(":");
         if (parts.length >= 2) {
             const subtitle = normalizeForSearch(parts[1]);
-            // Nếu subtitle đủ dài để làm định danh (>3 ký tự)
             if (subtitle.length > 3) {
-                // Kiểm tra xem candidate có chứa subtitle đó không
-                // Hoặc candidate có khớp với mapping tiếng Việt của subtitle không (đã xử lý trong queries)
-                
-                // Logic: Nếu candidate không chứa subtitle, VÀ candidate lại chứa một subtitle KHÁC
-                // Thì khả năng cao là sai phim.
-                // Tuy nhiên, đơn giản nhất: Nếu tìm "Dexter: Original Sin", kết quả phải chứa "Original Sin" hoặc "Trọng Tội"
-                // Trừ khi kết quả là "Dexter" (chung chung) -> Cái này khó phân biệt.
-                
-                // GIẢI PHÁP: Kiểm tra queries. Nếu queries có chứa Subtitle cụ thể
-                // Thì Candidate bắt buộc phải match ít nhất 1 query DÀI (chứa cả subtitle)
-                // Chứ không được chỉ match query NGẮN (phần đầu).
-                
-                // Nhưng ở đây ta dùng cách đơn giản hơn cho v27:
-                // Nếu Clean Name Gốc chứa "original sin" mà Clean Name Server KHÔNG chứa "original sin" -> BỎ.
                 if (cleanOrig.includes("original sin") && !cleanCand.includes("original sin")) {
-                    // Trừ khi mapping tiếng việt cứu (nhưng "Hồi Sinh" vs "Original Sin" thì mapping cũng ko cứu)
                     return false; 
                 }
             }
@@ -256,7 +236,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v27): "${originalName}" (${year}) | Type: ${type} ===`);
+    console.log(`\n=== Xử lý (v28): "${originalName}" (${year}) | Type: ${type} ===`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -275,36 +255,39 @@ builder.defineStreamHandler(async ({ type, id }) => {
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
 
-    // === BỘ LỌC NÂNG CAO V27 ===
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
 
-    // 1. Check Subtitle Conflict (Fix Dexter: Original Sin vs Resurrection)
+    // 1. Subtitle Check (Dexter)
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. Exact Match Priority (Fix Oppenheimer vs Oppenheimer Documentary)
-    // Nếu tồn tại một kết quả khớp CHÍNH XÁC tên (Oppenheimer == Oppenheimer)
-    // Thì loại bỏ các kết quả "tương tự nhưng dài hơn" (To End All War...)
+    // 2. GOLDEN MATCH LOGIC (Fix Oppenheimer)
+    // Nếu tìm thấy một phim mà tên sau khi làm sạch = Tên gốc (hoặc Tên gốc + Năm)
+    // Thì CHỈ LẤY những phim đó, bỏ hết các phim tên dài dòng (Documentary)
     if (matchedCandidates.length > 1 && !isHarryPotter) {
-        const exactMatches = matchedCandidates.filter(m => {
-            const mClean = normalizeForSearch(m.name);
-            const oClean = normalizeForSearch(originalName);
-            // So sánh chính xác hoặc chỉ lệch năm
-            return mClean === oClean || mClean === oClean + ` ${year}`;
+        const oClean = normalizeForSearch(originalName);
+        
+        const goldenMatches = matchedCandidates.filter(m => {
+            let mClean = normalizeForSearch(m.name);
+            // Loại bỏ năm khỏi tên server để so sánh tên phim thuần túy
+            // VD: "Oppenheimer 2023" -> "Oppenheimer"
+            mClean = mClean.replace(year.toString(), "").trim();
+            return mClean === oClean;
         });
 
-        if (exactMatches.length > 0) {
-            console.log(`-> (v27) Đã tìm thấy kết quả khớp chính xác 100%. Loại bỏ các phim ăn theo.`);
-            matchedCandidates = exactMatches;
+        if (goldenMatches.length > 0) {
+            console.log(`-> (v28) Golden Match Found! Chỉ giữ lại phim khớp chính xác.`);
+            matchedCandidates = goldenMatches;
         }
     }
 
-    // 3. Exact Year Check (Fix El Camino vs Xico) - Fallback
+    // 3. Fallback Year Check
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
+        // Nếu sau khi lọc năm mà vẫn còn phim, thì mới update. Tránh lọc quá tay mất hết.
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // 4. Short Title Cleanup & Whitelist (Fix Up, It...)
+    // 4. Short Title Logic (Up, It...)
     if (cleanName.length <= 5 && matchedCandidates.length > 1) {
         matchedCandidates.sort((a, b) => a.name.length - b.name.length);
         const minLen = matchedCandidates[0].name.length;
@@ -322,7 +305,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
     console.log(`-> KẾT QUẢ CUỐI CÙNG:`);
     matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
 
-    // STREAM HANDLER (Giữ nguyên logic HP & Strict Episode)
     let allStreams = [];
     const hpKeywords = getHPKeywords(originalName);
 
@@ -332,6 +314,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
             if (type === 'movie') {
                 const streamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(fullId)}.json`;
                 const sRes = await axios.get(streamUrl, { headers: HEADERS });
+                
                 if (sRes.data && sRes.data.streams) {
                     let streams = sRes.data.streams;
                     if (isHarryPotter && hpKeywords) {
@@ -353,16 +336,19 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const metaUrl = `${TARGET_BASE_URL}/meta/${type}/${encodeURIComponent(fullId)}.json`;
                 const metaRes = await axios.get(metaUrl, { headers: HEADERS });
                 if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) return [];
+
                 const matchedVideos = metaRes.data.meta.videos.filter(vid => {
                     const info = extractEpisodeInfo(vid.title || vid.name || "");
                     if (!info) return false;
                     if (info.s === 0) return info.e === episode; 
                     return info.s === season && info.e === episode;
                 });
+
                 let episodeStreams = [];
                 for (const vid of matchedVideos) {
                     const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(vid.id)}.json`;
                     const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
+                    
                     if (sRes.data && sRes.data.streams) {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
@@ -387,11 +373,13 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const results = await Promise.all(streamPromises);
     results.forEach(streams => allStreams = allStreams.concat(streams));
+
     allStreams.sort((a, b) => {
         const qA = a.title.includes("4K") ? 3 : (a.title.includes("1080") ? 2 : 1);
         const qB = b.title.includes("4K") ? 3 : (b.title.includes("1080") ? 2 : 1);
         return qB - qA;
     });
+
     return { streams: allStreams };
 });
 
