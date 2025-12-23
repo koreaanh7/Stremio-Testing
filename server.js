@@ -18,27 +18,27 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v26",
     version: "26.0.0",
-    name: "Phim4K VIP (Alias Master)",
-    description: "Fix Short Titles with Long Vi-Names (Up, It, Coco...)",
+    name: "Phim4K VIP (Short Title Fix)",
+    description: "Fix Up, It, Rio, Ted, Cars & Short Titles",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MỞ RỘNG (UPDATED v26) ===
+// === 1. TỪ ĐIỂN MỞ RỘNG (CẬP NHẬT MỚI NHẤT) ===
 const VIETNAMESE_MAPPING = {
-    // --- NEW FIXES v26 ---
-    "12 monkeys": ["12 con khỉ", "twelve monkeys"], // Fix số vs chữ
-    "it": ["gã hề ma quái", "it"], // Fix tên siêu ngắn
-    "up": ["vút bay", "up"],
-    "ted": ["chú gấu ted", "ted"],
-    "rio": ["chú vẹt đuôi dài", "rio"],
-    "cars": ["vương quốc xe hơi", "cars"],
-    "coco": ["coco hội ngộ diệu kì", "coco"], // Fix tên có hậu tố dài
-    "elio": ["elio cậu bé đến từ trái đất", "elio"], // Fix tên có hậu tố dài
+    // --- FIX CỤ THỂ CỦA BẠN (V26) ---
+    "12 monkeys": ["12 con khỉ", "twelve monkeys"],
+    "it": ["gã hề ma quái"],
+    "up": ["vút bay"],
+    "ted": ["chú gấu ted"],
+    "rio": ["chú vẹt đuôi dài"],
+    "cars": ["vương quốc xe hơi"],
+    "coco": ["hội ngộ diệu kì", "coco hội ngộ diệu kì"],
+    "elio": ["cậu bé đến từ trái đất", "elio cậu bé đến từ trái đất"],
 
-    // --- CÁC FIX CŨ (Đã ổn định) ---
+    // --- CÁC FIX CŨ ---
     "elf": ["chàng tiên giáng trần", "elf"],
     "f1": ["f1"],
     "f1: the movie": ["f1"],
@@ -46,7 +46,7 @@ const VIETNAMESE_MAPPING = {
     "dark": ["đêm lặng"],
     "el camino: a breaking bad movie": ["el camino", "tập làm người xấu movie"],
     
-    // --- HARRY POTTER ---
+    // Harry Potter Collection Mapping
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
     "harry potter and the chamber of secrets": ["harry potter colection"],
@@ -57,7 +57,7 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 1": ["harry potter colection"],
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 
-    // --- ANIME & KHÁC ---
+    // Anime / Ghibli / Khác
     "from": ["bẫy"],
     "bet": ["học viện đỏ đen"],
     "sisu: road to revenge": ["sisu 2"],
@@ -117,18 +117,17 @@ function extractEpisodeInfo(filename) {
     return null;
 }
 
-// === LOGIC MATCH (Cải tiến v26) ===
 function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseList, queries) {
     if (candidate.type && candidate.type !== type) return false;
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
-    // HP Collection Fix
+    // HP Collection Bypass
     if (serverClean.includes("harry potter colection")) {
          if (originalName.toLowerCase().includes("harry potter")) return true;
     }
 
-    // YEAR CHECK
+    // Year Check
     let yearMatch = false;
     if (!hasYear) yearMatch = true;
     else {
@@ -145,31 +144,32 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // CHECK MAPPED VIETNAMESE (Ưu tiên cao nhất - "Miễn Tử" về độ dài)
+    // 1. Check Vietnamese Mapping (Ưu tiên tuyệt đối)
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
-            // Nếu khớp tên tiếng Việt -> Return True ngay (Bypass mọi check độ dài)
+            // Nếu khớp Mapping thì return True ngay, không cần check độ dài
             if (serverClean.includes(mappedClean)) return true;
         }
     }
 
-    // CHECK QUERIES (Tiếng Anh / Gốc)
+    // 2. Check English Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
         
-        // Logic tên ngắn (<= 4 ký tự)
+        // Logic cho tên ngắn (Up, It, Ted...)
         if (qClean.length <= 4) {
-            // Regex tìm từ đơn
+            // Regex: Bắt buộc từ đơn (Word Boundary)
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
+            
             if (strictRegex.test(serverClean)) {
-                // Heuristic độ dài:
-                // Thường thì "Up" (2 chars) vs "Vút Bay Up" (10 chars).
-                // Nhưng "Elio" (4 chars) vs "Elio: Cậu Bé Đến Từ Trái Đất" (30 chars).
-                // Nới lỏng max length lên 10 lần (thay vì 7) để bắt được các tên dài dòng này.
-                if (serverClean.length <= qClean.length * 10) return true;
+                // UPDATE V26: Nới lỏng giới hạn độ dài lên 15 lần (thay vì 7)
+                // Để bắt được: "Vút Bay (2009) Up" (Up=2 chars, Full=19 chars -> 9.5 lần -> OK)
+                if (serverClean.length <= qClean.length * 15) return true;
             }
-        } else {
+        } 
+        // Logic tên dài thường
+        else {
             if (serverClean.includes(qClean)) return true;
         }
     }
@@ -221,7 +221,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const uniqueQueries = [...new Set(queries)];
     console.log(`\n=== Xử lý (v26): "${originalName}" (${year}) | Type: ${type} ===`);
-    console.log(`-> Queries: ${JSON.stringify(uniqueQueries)}`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -240,15 +239,21 @@ builder.defineStreamHandler(async ({ type, id }) => {
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
 
-    // Ưu tiên năm chính xác (nhưng bỏ qua logic này nếu là Harry Potter Collection)
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
+    // Short title cleanup (V26: Chỉ lọc nếu độ dài quá chênh lệch 10 lần)
+    if (cleanName.length <= 5 && matchedCandidates.length > 1) {
+        matchedCandidates.sort((a, b) => a.name.length - b.name.length);
+        const minLen = matchedCandidates[0].name.length;
+        matchedCandidates = matchedCandidates.filter(m => m.name.length <= minLen * 10);
+    }
+
     if (matchedCandidates.length === 0) return { streams: [] };
-    console.log(`-> KẾT QUẢ CUỐI CÙNG (${matchedCandidates.length}):`);
+    console.log(`-> KẾT QUẢ CUỐI CÙNG:`);
     matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
 
     let allStreams = [];
@@ -263,15 +268,18 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 
                 if (sRes.data && sRes.data.streams) {
                     let streams = sRes.data.streams;
-                    // HP FILTER
+
                     if (isHarryPotter && hpKeywords) {
                         streams = streams.filter(s => {
                             const sTitle = (s.title || s.name || "").toLowerCase();
                             const hasKeyword = hpKeywords.some(kw => sTitle.includes(kw));
-                            if (hpKeywords.includes("part 1") && (sTitle.includes("part 2") || sTitle.includes("pt.2"))) return false;
+                            if (hpKeywords.includes("part 1")) {
+                                if (sTitle.includes("part 2") || sTitle.includes("pt.2")) return false;
+                            }
                             return hasKeyword;
                         });
                     }
+
                     return streams.map(s => ({
                         name: "Phim4K VIP",
                         title: s.title || s.name,
