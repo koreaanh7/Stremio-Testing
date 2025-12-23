@@ -16,18 +16,17 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v29",
-    version: "29.0.0",
-    name: "Phim4K VIP (Pattern Recognizer)",
-    description: "Smart Pattern Matching for Short Titles (Coco, Up, It) without Whitelist",
+    id: "com.phim4k.vip.final.v30",
+    version: "30.0.0",
+    name: "Phim4K VIP (Identity Isolator)",
+    description: "Fix common words (From, It, Us) matching partial titles",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MAPPING (CHỈ DÙNG ĐỂ TẠO TỪ KHÓA TÌM KIẾM) ===
-// Lưu ý: Không còn dùng để "bảo kê" trong vòng lọc nữa.
+// === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
     "from": ["bẫy"], 
     "dexter: original sin": ["dexter original sin", "dexter trọng tội", "dexter sát thủ"],
@@ -38,7 +37,7 @@ const VIETNAMESE_MAPPING = {
     "ted": ["chú gấu ted"],
     "rio": ["chú vẹt đuôi dài"],
     "cars": ["vương quốc xe hơi"],
-    "coco": ["coco hội ngộ diệu kì", "coco hoi ngo dieu ki"], // Vẫn cần dòng này để Server biết đường tìm ra phim
+    "coco": ["coco hội ngộ diệu kì", "coco hoi ngo dieu ki"],
     "elio": ["elio cậu bé đến từ trái đất", "elio cau be den tu trai dat"],
     "elf": ["chàng tiên giáng trần", "elf"],
     "f1": ["f1"],
@@ -101,7 +100,7 @@ function getHPKeywords(originalName) {
 function normalizeForSearch(title) {
     return title.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, "") 
-        .replace(/['":\-.()\[\]]/g, " ") // Xóa sạch ký tự đặc biệt
+        .replace(/['":\-.()\[\]]/g, " ") 
         .replace(/\s+/g, " ")
         .trim();
 }
@@ -141,10 +140,11 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // Mapping Check (Chỉ dùng để check khớp từ khóa, không dùng để skip length check sau này)
+    // Check Mapping
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
+            // Strict check for short mapping (Bay vs Baymax)
             if (mappedClean.length <= 3) {
                 const strictRegex = new RegExp(`(^|\\s|\\W)${mappedClean}($|\\s|\\W)`, 'i');
                 if (strictRegex.test(serverClean)) return true;
@@ -154,15 +154,12 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         }
     }
 
-    // Query Check
+    // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
         if (qClean.length <= 4) {
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
-            if (strictRegex.test(serverClean)) {
-                // Tạm thời cho phép dài để vào vòng lọc sau (nhân 9 để lọt vào vòng shortlist)
-                if (serverClean.length <= qClean.length * 15) return true;
-            }
+            if (strictRegex.test(serverClean)) return true;
         } else {
             if (serverClean.includes(qClean)) return true;
         }
@@ -231,7 +228,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v29): "${originalName}" (${year}) | Type: ${type} ===`);
+    console.log(`\n=== Xử lý (v30): "${originalName}" (${year}) | Type: ${type} ===`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -255,7 +252,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     // 1. Subtitle Check (Dexter)
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. GOLDEN MATCH (Oppenheimer) - GIỮ NGUYÊN
+    // 2. GOLDEN MATCH (Oppenheimer)
     if (matchedCandidates.length > 1 && !isHarryPotter) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
@@ -265,7 +262,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
         });
 
         if (goldenMatches.length > 0) {
-            console.log(`-> (v29) Golden Match Found! Chỉ giữ lại phim khớp chính xác.`);
+            console.log(`-> (v30) Golden Match Found! Chỉ giữ lại phim khớp chính xác.`);
             matchedCandidates = goldenMatches;
         }
     }
@@ -276,36 +273,38 @@ builder.defineStreamHandler(async ({ type, id }) => {
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // 4. SHORT TITLE FILTER (SMART PATTERN RECOGNITION - NO WHITELIST)
-    // Áp dụng cho tên ngắn <= 5 ký tự (Coco, Up, It, From...)
-    if (cleanName.length <= 5 && matchedCandidates.length > 1) {
-        matchedCandidates.sort((a, b) => a.name.length - b.name.length);
-        const minLen = matchedCandidates[0].name.length;
-        
+    // 4. SHORT TITLE ISOLATION (FIX "FROM", "IT", "US")
+    if (cleanName.length <= 5 && matchedCandidates.length > 0) {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
-            const qClean = normalizeForSearch(cleanName); // "coco", "up", "it"
-            
-            // Điều kiện cơ bản: Độ dài không quá chênh lệch (x4)
-            const matchesBasicLength = m.name.length <= minLen * 4;
-            
-            // Điều kiện Pattern: 
-            // - Phim4K thường đặt: "Tên Việt Dài (Năm) Tên Gốc Ngắn"
-            // - Kiểm tra xem Tên Server có KẾT THÚC bằng tên gốc không?
-            const endsWithQuery = new RegExp(`[\\s\\W]${qClean}$`, 'i').test(mClean);
-            
-            // - Hoặc BẮT ĐẦU bằng tên gốc (ít gặp hơn nhưng cứ thêm cho chắc)
-            const startsWithQuery = new RegExp(`^${qClean}[\\s\\W]`, 'i').test(mClean);
+            const qClean = normalizeForSearch(originalName);
 
-            // LOGIC QUYẾT ĐỊNH:
-            // 1. Nếu ngắn -> OK.
-            if (matchesBasicLength) return true;
-
-            // 2. Nếu DÀI, nhưng đúng cấu trúc "Kết thúc bằng tên gốc" VÀ đúng Năm -> OK (Bypass Whitelist)
-            if ((endsWithQuery || startsWithQuery) && checkExactYear(m, year)) {
-                return true; 
+            // LOGIC "BẢO KÊ" (Nếu khớp Mapping tiếng Việt thì cho qua luôn)
+            if (mappedVietnameseList.length > 0) {
+                const matchesMap = mappedVietnameseList.some(map => {
+                    const mapClean = normalizeForSearch(map);
+                    return mClean.includes(mapClean);
+                });
+                if (matchesMap) return true; // VD: "Bẫy" khớp -> OK
             }
+
+            // LOGIC "ISOLATION" (Nếu không khớp tiếng Việt, bắt buộc phải khớp tên tiếng Anh ĐỘC LẬP)
+            // Phim4K thường có format: "Vietnamese Title (Year) English Title"
+            // Ta kiểm tra xem tên server có KẾT THÚC chính xác bằng tên phim gốc không.
+            // VD: "Bay (2022) FROM" -> Ends with " from" -> OK
+            // VD: "In From the Cold" -> Ends with " cold" -> FAIL
+            // VD: "From Now On" -> Ends with " on" -> FAIL
+
+            // Regex: Kiểm tra xem chuỗi có kết thúc bằng " từ_khóa" không (có dấu cách trước)
+            // Hoặc chuỗi chính là từ khóa (trường hợp tên server chỉ có tiếng Anh)
+            const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
+            const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
             
+            // Một số trường hợp tên tiếng Anh nằm đầu: "From (2022) Bẫy" (ít gặp nhưng đề phòng)
+            const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
+
+            if (endsWithExact || isExact || startsWithExact) return true;
+
             return false;
         });
     }
