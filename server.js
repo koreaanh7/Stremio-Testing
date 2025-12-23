@@ -18,28 +18,27 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v26",
     version: "26.0.0",
-    name: "Phim4K VIP (Dictionary Update)",
-    description: "Fix Short Titles (Up, It, Rio, Cars...) & 12 Monkeys",
+    name: "Phim4K VIP (Dictionary Master)",
+    description: "Fix Short Titles (Up, It, Rio...), 12 Monkeys & HP Collection",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MỞ RỘNG (CẬP NHẬT MỚI NHẤT) ===
+// === 1. TỪ ĐIỂN MỞ RỘNG (CỰC KỲ QUAN TRỌNG) ===
 const VIETNAMESE_MAPPING = {
-    // --- CẬP NHẬT MỚI (THEO YÊU CẦU CỦA BẠN) ---
-    "12 monkeys": ["12 con khỉ", "twelve monkeys"],
-    "twelve monkeys": ["12 con khỉ", "twelve monkeys"],
-    "it": ["gã hề ma quái", "it"],
-    "up": ["vút bay", "up"], // Fix phim Up
-    "ted": ["chú gấu ted", "ted"],
+    // --- UPDATE MỚI CỦA BẠN (v26) ---
+    "12 monkeys": ["12 con khỉ", "twelve monkeys"], // Số thành chữ
+    "it": ["gã hề ma quái", "it"], // Tên siêu ngắn
+    "up": ["vút bay", "up"], // Tên siêu ngắn
+    "ted": ["chú gấu ted", "ted"], 
     "rio": ["chú vẹt đuôi dài", "rio"],
     "cars": ["vương quốc xe hơi", "cars"],
-    "coco": ["coco hội ngộ diệu kì", "coco"],
-    "elio": ["elio cậu bé đến từ trái đất", "elio"],
+    "coco": ["hội ngộ diệu kì", "coco"],
+    "elio": ["cậu bé đến từ trái đất", "elio"],
 
-    // --- CÁC MAPPING CŨ (ĐÃ ỔN ĐỊNH) ---
+    // --- CÁC FIX CŨ ---
     "elf": ["chàng tiên giáng trần", "elf"],
     "f1": ["f1"],
     "f1: the movie": ["f1"],
@@ -47,7 +46,7 @@ const VIETNAMESE_MAPPING = {
     "dark": ["đêm lặng"],
     "el camino: a breaking bad movie": ["el camino", "tập làm người xấu movie"],
     
-    // Harry Potter Collection
+    // --- HARRY POTTER (GIỮ NGUYÊN) ---
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
     "harry potter and the chamber of secrets": ["harry potter colection"],
@@ -58,7 +57,7 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 1": ["harry potter colection"],
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 
-    // Anime & Khác
+    // --- ANIME & GHIBLI ---
     "from": ["bẫy"],
     "bet": ["học viện đỏ đen"],
     "sisu: road to revenge": ["sisu 2"],
@@ -145,7 +144,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // Check Alias Tiếng Việt
+    // Ưu tiên Mapping Tiếng Việt
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
@@ -153,15 +152,15 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         }
     }
 
-    // Check Queries
+    // Logic Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
-        // Logic tên ngắn <= 4 ký tự (như "Up", "It")
+        // Với các tên siêu ngắn (Up, It), nếu đã có Mapping thì mapping sẽ catch ở trên.
+        // Còn ở đây ta vẫn giữ logic check độ dài để phòng hờ.
         if (qClean.length <= 4) {
-            // Regex: Từ đơn chính xác
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
             if (strictRegex.test(serverClean)) {
-                if (serverClean.length <= qClean.length * 7) return true;
+                if (serverClean.length <= qClean.length * 8) return true; // Nới lỏng thêm chút cho các tên ghép dài
             }
         } else {
             if (serverClean.includes(qClean)) return true;
@@ -176,6 +175,13 @@ function checkExactYear(candidate, targetYear) {
     if (yearMatches) return yearMatches.some(y => parseInt(y) === targetYear);
     if (candidate.releaseInfo) return candidate.releaseInfo.includes(targetYear.toString());
     return false;
+}
+
+async function getCinemetaMetadata(type, imdbId) {
+    try {
+        const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${imdbId}.json`);
+        return (res.data && res.data.meta) ? res.data.meta : null;
+    } catch (e) { return null; }
 }
 
 builder.defineStreamHandler(async ({ type, id }) => {
@@ -233,22 +239,15 @@ builder.defineStreamHandler(async ({ type, id }) => {
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
 
-    // Ưu tiên năm chính xác
+    // Ưu tiên năm chính xác (Trừ HP)
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // Short title cleanup (Clean bớt rác nếu tìm tên ngắn mà ra nhiều kết quả lệch lạc)
-    if (cleanName.length <= 5 && matchedCandidates.length > 1) {
-        matchedCandidates.sort((a, b) => a.name.length - b.name.length);
-        const minLen = matchedCandidates[0].name.length;
-        matchedCandidates = matchedCandidates.filter(m => m.name.length <= minLen * 5); // Nới lên 5 để cover các tên Việt dài
-    }
-
     if (matchedCandidates.length === 0) return { streams: [] };
-    console.log(`-> KẾT QUẢ CUỐI CÙNG:`);
+    console.log(`-> KẾT QUẢ:`);
     matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
 
     let allStreams = [];
@@ -264,7 +263,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 if (sRes.data && sRes.data.streams) {
                     let streams = sRes.data.streams;
 
-                    // Filter Harry Potter
+                    // FILTER CHO HP
                     if (isHarryPotter && hpKeywords) {
                         streams = streams.filter(s => {
                             const sTitle = (s.title || s.name || "").toLowerCase();
@@ -303,6 +302,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     if (sRes.data && sRes.data.streams) {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
+                            // Strict Stream Filter cho Series
                             const streamInfo = extractEpisodeInfo(streamTitle);
                             if (streamInfo && streamInfo.s !== 0) {
                                 if (streamInfo.s !== season || streamInfo.e !== episode) return;
@@ -333,13 +333,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     return { streams: allStreams };
 });
-
-async function getCinemetaMetadata(type, imdbId) {
-    try {
-        const res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${imdbId}.json`);
-        return (res.data && res.data.meta) ? res.data.meta : null;
-    } catch (e) { return null; }
-}
 
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port: port });
