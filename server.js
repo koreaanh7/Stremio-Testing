@@ -18,34 +18,26 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v26",
     version: "26.0.0",
-    name: "Phim4K VIP (Polyglot Fix)",
-    description: "Fix 12 Monkeys, It, Up, Ted, Rio, Cars, Coco",
+    name: "Phim4K VIP (Dictionary Expansion)",
+    description: "Fix 12 Monkeys, It, Up, Ted, Rio, Cars, Coco & HP Collection",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MỞ RỘNG (CẬP NHẬT MỚI NHẤT) ===
+// === 1. TỪ ĐIỂN MỞ RỘNG (V26) ===
 const VIETNAMESE_MAPPING = {
-    // --- CÁC PHIM MỚI BÁO LỖI ---
-    "12 monkeys": ["12 con khỉ", "twelve monkeys"], // Server dùng chữ "Twelve"
-    "it": ["gã hề ma quái", "it chú hề ma quái"], // Fix phim It
-    "up": ["vút bay"], // Fix phim Up
-    "ted": ["chú gấu ted"], // Fix Ted
-    "rio": ["chú vẹt đuôi dài"], // Fix Rio
-    "cars": ["vương quốc xe hơi"], // Fix Cars
-    "coco": ["coco hội ngộ diệu kì", "hội ngộ diệu kì"], // Fix Coco
-    
-    // --- CÁC MAPPING CŨ (GIỮ NGUYÊN) ---
-    "elf": ["chàng tiên giáng trần", "elf"],
-    "f1": ["f1"],
-    "f1: the movie": ["f1"],
-    "sentimental value": ["giá trị tình cảm", "affeksjonsverdi"],
-    "dark": ["đêm lặng"],
-    "el camino: a breaking bad movie": ["el camino", "tập làm người xấu movie"],
-    
-    // Harry Potter
+    // --- FIX MỚI NHẤT (V26) ---
+    "12 monkeys": ["12 con khỉ", "twelve monkeys"],
+    "it": ["gã hề ma quái"], // Map thẳng vào tên Việt để tránh tìm từ "it" chung chung
+    "up": ["vút bay"],
+    "ted": ["chú gấu ted"],
+    "rio": ["chú vẹt đuôi dài"],
+    "cars": ["vương quốc xe hơi"],
+    "coco": ["coco hội ngộ diệu kì", "coco"],
+
+    // --- FIX HARRY POTTER (V25) ---
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
     "harry potter and the chamber of secrets": ["harry potter colection"],
@@ -56,7 +48,13 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 1": ["harry potter colection"],
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 
-    // Ghibli & Anime & Others
+    // --- FIX CÁC PHIÊN BẢN TRƯỚC ---
+    "elf": ["chàng tiên giáng trần", "elf"],
+    "f1": ["f1"],
+    "f1: the movie": ["f1"],
+    "sentimental value": ["giá trị tình cảm", "affeksjonsverdi"],
+    "dark": ["đêm lặng"],
+    "el camino: a breaking bad movie": ["el camino", "tập làm người xấu movie"],
     "from": ["bẫy"],
     "bet": ["học viện đỏ đen"],
     "sisu: road to revenge": ["sisu 2"],
@@ -139,28 +137,28 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
                      || candidate.releaseInfo.includes((year+1).toString());
         } else yearMatch = true;
     }
-    
+    // Bỏ check năm nếu là HP Collection
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // Ưu tiên Alias tiếng Việt
+    // 1. CHECK MAPPING TIẾNG VIỆT (QUAN TRỌNG: ƯU TIÊN SỐ 1)
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
-            // Với các tên phim cực ngắn (It, Up) đã được map, ta bắt buộc phải match
-            if (['it', 'up', 'ted', 'rio', 'cars', 'sisu 2', 'f1', '10dance', 'affeksjonsverdi', 'elf'].includes(mappedVietnamese)) {
-                 if (containsWithAccent(serverName, mappedVietnamese)) return true;
-            }
+            // Nếu khớp Mapping -> RETURN TRUE NGAY (Bỏ qua check độ dài)
             if (serverClean.includes(mappedClean)) return true;
         }
     }
 
+    // 2. CHECK QUERY THƯỜNG
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
-        // Logic tên ngắn
         if (qClean.length <= 4) {
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
             if (strictRegex.test(serverClean)) {
+                // Heuristic độ dài cho tên ngắn:
+                // Nới lỏng lên 7 lần, nhưng vẫn giữ để tránh rác.
+                // Lưu ý: Những phim đã map ở bước 1 sẽ không chạy xuống đây, nên "Up" hay "It" sẽ an toàn.
                 if (serverClean.length <= qClean.length * 7) return true;
             }
         } else {
@@ -168,10 +166,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         }
     }
     return false;
-}
-
-function containsWithAccent(fullString, subString) {
-    return fullString.toLowerCase().includes(subString.toLowerCase());
 }
 
 function checkExactYear(candidate, targetYear) {
@@ -237,6 +231,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
 
+    // Ưu tiên năm chính xác (Trừ HP)
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
@@ -244,10 +239,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
     }
 
     if (matchedCandidates.length === 0) return { streams: [] };
-    console.log(`-> KẾT QUẢ:`);
+    console.log(`-> KẾT QUẢ CUỐI CÙNG:`);
     matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
 
     let allStreams = [];
+    
     const hpKeywords = getHPKeywords(originalName);
 
     const streamPromises = matchedCandidates.map(async (match) => {
@@ -260,13 +256,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 if (sRes.data && sRes.data.streams) {
                     let streams = sRes.data.streams;
 
+                    // LOGIC HARRY POTTER
                     if (isHarryPotter && hpKeywords) {
                         streams = streams.filter(s => {
                             const sTitle = (s.title || s.name || "").toLowerCase();
                             const hasKeyword = hpKeywords.some(kw => sTitle.includes(kw));
-                            if (hpKeywords.includes("part 1")) {
-                                if (sTitle.includes("part 2") || sTitle.includes("pt.2")) return false;
-                            }
+                            if (hpKeywords.includes("part 1") && (sTitle.includes("part 2") || sTitle.includes("pt.2"))) return false;
                             return hasKeyword;
                         });
                     }
