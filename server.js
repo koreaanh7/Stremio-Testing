@@ -18,26 +18,35 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v26",
     version: "26.0.0",
-    name: "Phim4K VIP (Dictionary Expansion)",
-    description: "Fix 12 Monkeys, It, Up, Ted, Rio, Cars, Coco & HP Collection",
+    name: "Phim4K VIP (The Ultimate Fix)",
+    description: "Fix 12 Monkeys, It, Up, Rio, Cars & Collection",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MỞ RỘNG (V26) ===
+// === 1. TỪ ĐIỂN MAPPING (CẬP NHẬT MỚI NHẤT) ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX MỚI NHẤT (V26) ---
-    "12 monkeys": ["12 con khỉ", "twelve monkeys"],
-    "it": ["gã hề ma quái"], // Map thẳng vào tên Việt để tránh tìm từ "it" chung chung
-    "up": ["vút bay"],
-    "ted": ["chú gấu ted"],
-    "rio": ["chú vẹt đuôi dài"],
-    "cars": ["vương quốc xe hơi"],
-    "coco": ["coco hội ngộ diệu kì", "coco"],
+    // --- MỚI CẬP NHẬT THEO YÊU CẦU ---
+    "12 monkeys": ["12 con khỉ", "twelve monkeys"], // Server dùng chữ Twelve
+    "it": ["gã hề ma quái", "it"], // Tên siêu ngắn
+    "up": ["vút bay", "up"], // Tên siêu ngắn
+    "ted": ["chú gấu ted", "ted"],
+    "rio": ["chú vẹt đuôi dài", "rio"],
+    "cars": ["vương quốc xe hơi", "cars"],
+    "coco": ["hội ngộ diệu kì", "coco"],
+    "elio": ["cậu bé đến từ trái đất", "elio"],
 
-    // --- FIX HARRY POTTER (V25) ---
+    // --- CÁC FIX CŨ ---
+    "elf": ["chàng tiên giáng trần", "elf"],
+    "f1": ["f1"],
+    "f1: the movie": ["f1"],
+    "sentimental value": ["giá trị tình cảm", "affeksjonsverdi"],
+    "dark": ["đêm lặng"],
+    "el camino: a breaking bad movie": ["el camino", "tập làm người xấu movie"],
+    
+    // --- HARRY POTTER COLLECTION ---
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
     "harry potter and the chamber of secrets": ["harry potter colection"],
@@ -48,13 +57,7 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 1": ["harry potter colection"],
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 
-    // --- FIX CÁC PHIÊN BẢN TRƯỚC ---
-    "elf": ["chàng tiên giáng trần", "elf"],
-    "f1": ["f1"],
-    "f1: the movie": ["f1"],
-    "sentimental value": ["giá trị tình cảm", "affeksjonsverdi"],
-    "dark": ["đêm lặng"],
-    "el camino: a breaking bad movie": ["el camino", "tập làm người xấu movie"],
+    // --- ANIME & KHÁC ---
     "from": ["bẫy"],
     "bet": ["học viện đỏ đen"],
     "sisu: road to revenge": ["sisu 2"],
@@ -81,7 +84,7 @@ const VIETNAMESE_MAPPING = {
     "naruto": ["naruto"]
 };
 
-// === HARRY POTTER KEYWORD FILTER ===
+// === HARRY POTTER FILTER ===
 function getHPKeywords(originalName) {
     const name = originalName.toLowerCase();
     if (name.includes("sorcerer") || name.includes("philosopher")) return ["philosopher", "sorcerer", "hòn đá", " 1 "];
@@ -119,7 +122,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
-    // FIX HP COLLECTION
+    // HP Collection Fix
     if (serverClean.includes("harry potter colection")) {
          if (originalName.toLowerCase().includes("harry potter")) return true;
     }
@@ -137,29 +140,36 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
                      || candidate.releaseInfo.includes((year+1).toString());
         } else yearMatch = true;
     }
-    // Bỏ check năm nếu là HP Collection
+    
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // 1. CHECK MAPPING TIẾNG VIỆT (QUAN TRỌNG: ƯU TIÊN SỐ 1)
+    // Mapping Check
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
-            // Nếu khớp Mapping -> RETURN TRUE NGAY (Bỏ qua check độ dài)
             if (serverClean.includes(mappedClean)) return true;
         }
     }
 
-    // 2. CHECK QUERY THƯỜNG
+    // Query Check (Logic v26 cải tiến cho tên ngắn)
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
+        
+        // Nếu query ngắn <= 4 ký tự (It, Up, Rio, Cars, Ted)
         if (qClean.length <= 4) {
+            // Regex bắt từ đơn (Word Boundary)
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
+            
             if (strictRegex.test(serverClean)) {
-                // Heuristic độ dài cho tên ngắn:
-                // Nới lỏng lên 7 lần, nhưng vẫn giữ để tránh rác.
-                // Lưu ý: Những phim đã map ở bước 1 sẽ không chạy xuống đây, nên "Up" hay "It" sẽ an toàn.
-                if (serverClean.length <= qClean.length * 7) return true;
+                // LOGIC MỚI: Tùy chỉnh hệ số nhân độ dài
+                // Nếu tên quá ngắn (<= 2 char như 'It', 'Up'), cho phép tên server dài gấp 20 lần
+                // Để chứa được "Gã hề ma quái (2017) It"
+                const lenMultiplier = qClean.length <= 2 ? 20 : 10;
+                
+                if (serverClean.length <= qClean.length * lenMultiplier) {
+                    return true;
+                }
             }
         } else {
             if (serverClean.includes(qClean)) return true;
@@ -231,11 +241,25 @@ builder.defineStreamHandler(async ({ type, id }) => {
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
 
-    // Ưu tiên năm chính xác (Trừ HP)
+    // Ưu tiên năm chính xác
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
+    }
+
+    // Sort theo độ dài và filter bớt kết quả rác (nhưng nới lỏng cho tên ngắn)
+    if (cleanName.length <= 5 && matchedCandidates.length > 1) {
+        matchedCandidates.sort((a, b) => a.name.length - b.name.length);
+        const minLen = matchedCandidates[0].name.length;
+        // Nếu tên gốc quá ngắn (It, Up), minLen có thể rất nhỏ (vd: 2). 
+        // Ta không thể dùng minLen * 4 vì sẽ loại mất tên tiếng Việt.
+        // Ta dùng ngưỡng cố định an toàn hơn.
+        matchedCandidates = matchedCandidates.filter(m => {
+             // Nếu minLen quá bé (<=5), cho phép chênh lệch nhiều hơn
+             if (minLen <= 5) return m.name.length < 50; 
+             return m.name.length <= minLen * 4;
+        });
     }
 
     if (matchedCandidates.length === 0) return { streams: [] };
@@ -243,7 +267,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
     matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
 
     let allStreams = [];
-    
     const hpKeywords = getHPKeywords(originalName);
 
     const streamPromises = matchedCandidates.map(async (match) => {
@@ -255,17 +278,16 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 
                 if (sRes.data && sRes.data.streams) {
                     let streams = sRes.data.streams;
-
-                    // LOGIC HARRY POTTER
                     if (isHarryPotter && hpKeywords) {
                         streams = streams.filter(s => {
                             const sTitle = (s.title || s.name || "").toLowerCase();
                             const hasKeyword = hpKeywords.some(kw => sTitle.includes(kw));
-                            if (hpKeywords.includes("part 1") && (sTitle.includes("part 2") || sTitle.includes("pt.2"))) return false;
+                            if (hpKeywords.includes("part 1")) {
+                                if (sTitle.includes("part 2") || sTitle.includes("pt.2")) return false;
+                            }
                             return hasKeyword;
                         });
                     }
-
                     return streams.map(s => ({
                         name: "Phim4K VIP",
                         title: s.title || s.name,
@@ -289,7 +311,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 for (const vid of matchedVideos) {
                     const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(vid.id)}.json`;
                     const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
-                    
                     if (sRes.data && sRes.data.streams) {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
