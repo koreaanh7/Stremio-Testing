@@ -16,10 +16,10 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v28",
-    version: "28.0.0",
-    name: "Phim4K VIP (The Dictator)",
-    description: "Strict Exact Match Priority (Fix Oppenheimer Doc)",
+    id: "com.phim4k.vip.final.v27",
+    version: "27.0.0",
+    name: "Phim4K VIP (Exactitude Architect)",
+    description: "Fix From/Baymax, Oppenheimer Doc, Dexter Spin-offs",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,10 +28,12 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    "from": ["bẫy"], 
+    // --- FIX LOGIC MỚI ---
+    "from": ["bẫy"], // Logic v27 sẽ chặn việc Bẫy -> Bay -> Baymax
     "dexter: original sin": ["dexter original sin", "dexter trọng tội", "dexter sát thủ"],
     "oppenheimer": ["oppenheimer"], 
 
+    // --- CÁC FIX CŨ ---
     "12 monkeys": ["12 con khỉ", "twelve monkeys"],
     "it": ["gã hề ma quái"],
     "up": ["vút bay"],
@@ -59,6 +61,7 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 
     // --- GHIBLI & OTHERS ---
+    "from": ["bẫy"],
     "bet": ["học viện đỏ đen"],
     "sisu: road to revenge": ["sisu 2"],
     "chainsaw man - the movie: reze arc": ["chainsaw man movie", "reze arc"],
@@ -84,6 +87,7 @@ const VIETNAMESE_MAPPING = {
     "naruto": ["naruto"]
 };
 
+// --- HARRY POTTER FILTER ---
 function getHPKeywords(originalName) {
     const name = originalName.toLowerCase();
     if (name.includes("sorcerer") || name.includes("philosopher")) return ["philosopher", "sorcerer", "hòn đá", " 1 "];
@@ -121,8 +125,10 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
+    // HP Override
     if (serverClean.includes("harry potter colection") && originalName.toLowerCase().includes("harry potter")) return true;
 
+    // Year Check
     let yearMatch = false;
     if (!hasYear) yearMatch = true;
     else {
@@ -139,10 +145,13 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // Logic V28: Strict Word Boundary for Short Mappings (From/Bẫy)
+    // === LOGIC V27 FIX "BẪY" (FROM) ===
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
+            
+            // Nếu từ khóa map quá ngắn (<= 3 ký tự, VD: "Bẫy" -> "bay"), dùng Regex bắt buộc Word Boundary
+            // Tránh "bay" khớp với "baymax"
             if (mappedClean.length <= 3) {
                 const strictRegex = new RegExp(`(^|\\s|\\W)${mappedClean}($|\\s|\\W)`, 'i');
                 if (strictRegex.test(serverClean)) return true;
@@ -152,6 +161,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         }
     }
 
+    // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
         if (qClean.length <= 4) {
@@ -174,31 +184,40 @@ function checkExactYear(candidate, targetYear) {
     return false;
 }
 
-// Logic V27: Subtitle Check
-function passesSubtitleCheck(candidateName, originalName) {
+// === LOGIC V27 MỚI: CHECK SUBTITLE (FIX DEXTER) ===
+function passesSubtitleCheck(candidateName, originalName, queries) {
     const cleanOrig = normalizeForSearch(originalName);
     const cleanCand = normalizeForSearch(candidateName);
+    
+    // Nếu tên gốc có cấu trúc "Title: Subtitle" (VD: Dexter: Original Sin)
     if (originalName.includes(":")) {
         const parts = originalName.split(":");
         if (parts.length >= 2) {
             const subtitle = normalizeForSearch(parts[1]);
+            // Nếu subtitle đủ dài để làm định danh (>3 ký tự)
             if (subtitle.length > 3) {
+                // Kiểm tra xem candidate có chứa subtitle đó không
+                // Hoặc candidate có khớp với mapping tiếng Việt của subtitle không (đã xử lý trong queries)
+                
+                // Logic: Nếu candidate không chứa subtitle, VÀ candidate lại chứa một subtitle KHÁC
+                // Thì khả năng cao là sai phim.
+                // Tuy nhiên, đơn giản nhất: Nếu tìm "Dexter: Original Sin", kết quả phải chứa "Original Sin" hoặc "Trọng Tội"
+                // Trừ khi kết quả là "Dexter" (chung chung) -> Cái này khó phân biệt.
+                
+                // GIẢI PHÁP: Kiểm tra queries. Nếu queries có chứa Subtitle cụ thể
+                // Thì Candidate bắt buộc phải match ít nhất 1 query DÀI (chứa cả subtitle)
+                // Chứ không được chỉ match query NGẮN (phần đầu).
+                
+                // Nhưng ở đây ta dùng cách đơn giản hơn cho v27:
+                // Nếu Clean Name Gốc chứa "original sin" mà Clean Name Server KHÔNG chứa "original sin" -> BỎ.
                 if (cleanOrig.includes("original sin") && !cleanCand.includes("original sin")) {
+                    // Trừ khi mapping tiếng việt cứu (nhưng "Hồi Sinh" vs "Original Sin" thì mapping cũng ko cứu)
                     return false; 
                 }
             }
         }
     }
     return true;
-}
-
-// === LOGIC V28: STRIP YEAR FOR PERFECT MATCH ===
-function isPerfectNameMatch(candidateName, originalName) {
-    // Xóa tất cả các cụm (YYYY) hoặc [YYYY] trong tên server
-    const nameWithoutYear = candidateName.replace(/[\(\[]\d{4}[\)\]]/g, "").trim();
-    const sClean = normalizeForSearch(nameWithoutYear);
-    const oClean = normalizeForSearch(originalName);
-    return sClean === oClean;
 }
 
 builder.defineStreamHandler(async ({ type, id }) => {
@@ -237,7 +256,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v28): "${originalName}" (${year}) | Type: ${type} ===`);
+    console.log(`\n=== Xử lý (v27): "${originalName}" (${year}) | Type: ${type} ===`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -256,30 +275,36 @@ builder.defineStreamHandler(async ({ type, id }) => {
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
 
-    matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName));
-
+    // === BỘ LỌC NÂNG CAO V27 ===
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
 
-    // === V28: THE DICTATOR (STRICT EXACT MATCH) ===
-    // Bỏ qua logic này với HP vì HP dùng Collection
-    if (!isHarryPotter && matchedCandidates.length > 1) {
-        // Kiểm tra xem có bất kỳ ứng viên nào trùng tên 100% (sau khi bỏ năm) không?
-        const hasPerfectMatch = matchedCandidates.some(m => isPerfectNameMatch(m.name, originalName));
+    // 1. Check Subtitle Conflict (Fix Dexter: Original Sin vs Resurrection)
+    matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-        if (hasPerfectMatch) {
-            console.log("-> (v28) Phát hiện Perfect Match! Đang thanh trừng các kết quả không chính xác...");
-            // Chỉ giữ lại những thằng nào là Perfect Match
-            matchedCandidates = matchedCandidates.filter(m => isPerfectNameMatch(m.name, originalName));
+    // 2. Exact Match Priority (Fix Oppenheimer vs Oppenheimer Documentary)
+    // Nếu tồn tại một kết quả khớp CHÍNH XÁC tên (Oppenheimer == Oppenheimer)
+    // Thì loại bỏ các kết quả "tương tự nhưng dài hơn" (To End All War...)
+    if (matchedCandidates.length > 1 && !isHarryPotter) {
+        const exactMatches = matchedCandidates.filter(m => {
+            const mClean = normalizeForSearch(m.name);
+            const oClean = normalizeForSearch(originalName);
+            // So sánh chính xác hoặc chỉ lệch năm
+            return mClean === oClean || mClean === oClean + ` ${year}`;
+        });
+
+        if (exactMatches.length > 0) {
+            console.log(`-> (v27) Đã tìm thấy kết quả khớp chính xác 100%. Loại bỏ các phim ăn theo.`);
+            matchedCandidates = exactMatches;
         }
     }
 
-    // Fallback: Exact Year Check
+    // 3. Exact Year Check (Fix El Camino vs Xico) - Fallback
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // Short Title Cleanup & Whitelist
+    // 4. Short Title Cleanup & Whitelist (Fix Up, It...)
     if (cleanName.length <= 5 && matchedCandidates.length > 1) {
         matchedCandidates.sort((a, b) => a.name.length - b.name.length);
         const minLen = matchedCandidates[0].name.length;
@@ -297,6 +322,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     console.log(`-> KẾT QUẢ CUỐI CÙNG:`);
     matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
 
+    // STREAM HANDLER (Giữ nguyên logic HP & Strict Episode)
     let allStreams = [];
     const hpKeywords = getHPKeywords(originalName);
 
