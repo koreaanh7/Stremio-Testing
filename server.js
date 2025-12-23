@@ -18,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v26",
     version: "26.0.0",
-    name: "Phim4K VIP (Dictionary Expansion)",
-    description: "Fix 12 Monkeys, It, Up, Ted, Rio & HP Collection",
+    name: "Phim4K VIP (Polyglot Fix)",
+    description: "Fix 12 Monkeys, It, Up, Ted, Rio, Cars, Coco",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,14 +28,16 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MỞ RỘNG (CẬP NHẬT MỚI NHẤT) ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX MỚI (v26) ---
-    "12 monkeys": ["12 con khỉ", "twelve monkeys"], // Fix số 12 thành chữ Twelve
-    "it": ["gã hề ma quái", "it"], // "It" quá ngắn, dùng tên Việt để bắt
-    "up": ["vút bay"], // "Up" là từ khóa chết, bắt buộc dùng tên Việt
-    "ted": ["chú gấu ted"],
-    "rio": ["chú vẹt đuôi dài"],
-
-    // --- CÁC MAPPING CŨ (ĐANG HOẠT ĐỘNG TỐT) ---
+    // --- CÁC PHIM MỚI BÁO LỖI ---
+    "12 monkeys": ["12 con khỉ", "twelve monkeys"], // Server dùng chữ "Twelve"
+    "it": ["gã hề ma quái", "it chú hề ma quái"], // Fix phim It
+    "up": ["vút bay"], // Fix phim Up
+    "ted": ["chú gấu ted"], // Fix Ted
+    "rio": ["chú vẹt đuôi dài"], // Fix Rio
+    "cars": ["vương quốc xe hơi"], // Fix Cars
+    "coco": ["coco hội ngộ diệu kì", "hội ngộ diệu kì"], // Fix Coco
+    
+    // --- CÁC MAPPING CŨ (GIỮ NGUYÊN) ---
     "elf": ["chàng tiên giáng trần", "elf"],
     "f1": ["f1"],
     "f1: the movie": ["f1"],
@@ -43,7 +45,7 @@ const VIETNAMESE_MAPPING = {
     "dark": ["đêm lặng"],
     "el camino: a breaking bad movie": ["el camino", "tập làm người xấu movie"],
     
-    // Harry Potter (Giữ nguyên v25)
+    // Harry Potter
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
     "harry potter and the chamber of secrets": ["harry potter colection"],
@@ -54,7 +56,7 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 1": ["harry potter colection"],
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 
-    // Anime / Ghibli
+    // Ghibli & Anime & Others
     "from": ["bẫy"],
     "bet": ["học viện đỏ đen"],
     "sisu: road to revenge": ["sisu 2"],
@@ -81,7 +83,7 @@ const VIETNAMESE_MAPPING = {
     "naruto": ["naruto"]
 };
 
-// === GIỮ NGUYÊN LOGIC HARRY POTTER TỪ V25 ===
+// === HARRY POTTER KEYWORD FILTER ===
 function getHPKeywords(originalName) {
     const name = originalName.toLowerCase();
     if (name.includes("sorcerer") || name.includes("philosopher")) return ["philosopher", "sorcerer", "hòn đá", " 1 "];
@@ -141,16 +143,21 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // ƯU TIÊN MAPPING (Giúp tìm ra Up, It, Ted...)
+    // Ưu tiên Alias tiếng Việt
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
+            // Với các tên phim cực ngắn (It, Up) đã được map, ta bắt buộc phải match
+            if (['it', 'up', 'ted', 'rio', 'cars', 'sisu 2', 'f1', '10dance', 'affeksjonsverdi', 'elf'].includes(mappedVietnamese)) {
+                 if (containsWithAccent(serverName, mappedVietnamese)) return true;
+            }
             if (serverClean.includes(mappedClean)) return true;
         }
     }
 
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
+        // Logic tên ngắn
         if (qClean.length <= 4) {
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
             if (strictRegex.test(serverClean)) {
@@ -161,6 +168,10 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         }
     }
     return false;
+}
+
+function containsWithAccent(fullString, subString) {
+    return fullString.toLowerCase().includes(subString.toLowerCase());
 }
 
 function checkExactYear(candidate, targetYear) {
@@ -232,12 +243,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    if (cleanName.length <= 5 && matchedCandidates.length > 1 && !isHarryPotter) {
-         matchedCandidates.sort((a, b) => a.name.length - b.name.length);
-         const minLen = matchedCandidates[0].name.length;
-         matchedCandidates = matchedCandidates.filter(m => m.name.length <= minLen * 4);
-    }
-
     if (matchedCandidates.length === 0) return { streams: [] };
     console.log(`-> KẾT QUẢ:`);
     matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
@@ -259,7 +264,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         streams = streams.filter(s => {
                             const sTitle = (s.title || s.name || "").toLowerCase();
                             const hasKeyword = hpKeywords.some(kw => sTitle.includes(kw));
-                            if (hpKeywords.includes("part 1") && (sTitle.includes("part 2") || sTitle.includes("pt.2"))) return false;
+                            if (hpKeywords.includes("part 1")) {
+                                if (sTitle.includes("part 2") || sTitle.includes("pt.2")) return false;
+                            }
                             return hasKeyword;
                         });
                     }
