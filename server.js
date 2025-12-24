@@ -18,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v31",
     version: "31.0.0",
-    name: "Phim4K VIP (Separation Master)",
-    description: "Fix Brother vs O Brother, Separation Logic",
+    name: "Phim4K VIP (Brotherhood Fix)",
+    description: "Fix O Brother vs Brother, Expanded Isolation Logic",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,9 +28,9 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX MỚI (BROTHER VS O BROTHER) ---
-    "o brother, where art thou?": ["3 kẻ trốn tù", "3 ke tron tu"],
-    "brother": ["brother"], // Map chính nó để kích hoạt logic so khớp chính xác
+    // --- FIX MỚI (BROTHERHOOD) ---
+    "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"],
+    "brother": ["brother", "lão đại", "người anh em"], // Mapping cho phim Brother (2000) của Kitano hoặc phim khác
 
     // --- CÁC FIX CŨ ---
     "from": ["bẫy"], 
@@ -102,11 +102,10 @@ function getHPKeywords(originalName) {
     return null;
 }
 
-// Cải tiến Normalization: Thêm ? , vào danh sách loại bỏ
 function normalizeForSearch(title) {
     return title.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, "") 
-        .replace(/['":\-.()\[\]?,]/g, " ") // Thêm dấu ? và ,
+        .replace(/['":\-.()\[\]?,]/g, " ") // Thêm dấu ? và , vào danh sách loại bỏ
         .replace(/\s+/g, " ")
         .trim();
 }
@@ -150,7 +149,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
-            // Strict check for short mapping
+            // Strict check for short mapping (Bay vs Baymax)
             if (mappedClean.length <= 3) {
                 const strictRegex = new RegExp(`(^|\\s|\\W)${mappedClean}($|\\s|\\W)`, 'i');
                 if (strictRegex.test(serverClean)) return true;
@@ -163,7 +162,8 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
-        if (qClean.length <= 4) {
+        // Tăng giới hạn strict check lên 9 ký tự (Để cover "Brother" = 7 ký tự)
+        if (qClean.length <= 9) {
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
             if (strictRegex.test(serverClean)) return true;
         } else {
@@ -224,7 +224,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const cleanName = normalizeForSearch(originalName);
     if (cleanName !== lowerName) queries.push(cleanName);
 
-    // Common Fixes
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
         const splitClean = normalizeForSearch(splitName);
@@ -259,18 +258,16 @@ builder.defineStreamHandler(async ({ type, id }) => {
     // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. GOLDEN MATCH (Fix Brother vs O Brother)
+    // 2. GOLDEN MATCH
     if (matchedCandidates.length > 1 && !isHarryPotter) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
             let mClean = normalizeForSearch(m.name);
             mClean = mClean.replace(year.toString(), "").trim();
-            // Nếu khớp 100% tên (Brother == Brother) thì lấy, bỏ qua O Brother...
             return mClean === oClean;
         });
-
         if (goldenMatches.length > 0) {
-            console.log(`-> (v31) Golden Match Found! Giữ lại chính chủ, loại bỏ phim tên dài hơn.`);
+            console.log(`-> (v31) Golden Match Found!`);
             matchedCandidates = goldenMatches;
         }
     }
@@ -281,12 +278,14 @@ builder.defineStreamHandler(async ({ type, id }) => {
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // 4. SHORT TITLE ISOLATION (Fix From, It, Us...)
-    if (cleanName.length <= 5 && matchedCandidates.length > 0) {
+    // 4. EXTENDED ISOLATION (FIX BROTHER vs O BROTHER)
+    // Tăng giới hạn từ 5 lên 9 ký tự để cover "Brother"
+    if (cleanName.length <= 9 && matchedCandidates.length > 0) {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
             const qClean = normalizeForSearch(originalName);
 
+            // BẢO KÊ (Mapping)
             if (mappedVietnameseList.length > 0) {
                 const matchesMap = mappedVietnameseList.some(map => {
                     const mapClean = normalizeForSearch(map);
@@ -295,11 +294,15 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 if (matchesMap) return true;
             }
 
+            // ISOLATION (CÁCH LY)
+            // Phim4K format: "VN (Year) EN"
+            // Kiểm tra xem tên Server có KẾT THÚC bằng tên gốc không?
             const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
             const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
-            const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
+            const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean); // Phòng hờ format ngược
 
             if (endsWithExact || isExact || startsWithExact) return true;
+
             return false;
         });
     }
@@ -339,19 +342,16 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const metaUrl = `${TARGET_BASE_URL}/meta/${type}/${encodeURIComponent(fullId)}.json`;
                 const metaRes = await axios.get(metaUrl, { headers: HEADERS });
                 if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) return [];
-
                 const matchedVideos = metaRes.data.meta.videos.filter(vid => {
                     const info = extractEpisodeInfo(vid.title || vid.name || "");
                     if (!info) return false;
                     if (info.s === 0) return info.e === episode; 
                     return info.s === season && info.e === episode;
                 });
-
                 let episodeStreams = [];
                 for (const vid of matchedVideos) {
                     const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(vid.id)}.json`;
                     const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
-                    
                     if (sRes.data && sRes.data.streams) {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
@@ -376,13 +376,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const results = await Promise.all(streamPromises);
     results.forEach(streams => allStreams = allStreams.concat(streams));
-
     allStreams.sort((a, b) => {
         const qA = a.title.includes("4K") ? 3 : (a.title.includes("1080") ? 2 : 1);
         const qB = b.title.includes("4K") ? 3 : (b.title.includes("1080") ? 2 : 1);
         return qB - qA;
     });
-
     return { streams: allStreams };
 });
 
