@@ -18,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v31",
     version: "31.0.0",
-    name: "Phim4K VIP (The Coen Brothers Fix)",
-    description: "Fix O Brother Where Art Thou, Brother conflict",
+    name: "Phim4K VIP (Separation Master)",
+    description: "Fix Brother vs O Brother, Separation Logic",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,9 +28,9 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX MỚI ---
-    "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"], // Map về tên Việt độc nhất
-    "brother": ["brother"], // Giữ nguyên Brother để tránh bị map nhầm sang O Brother
+    // --- FIX MỚI (BROTHER VS O BROTHER) ---
+    "o brother, where art thou?": ["3 kẻ trốn tù", "3 ke tron tu"],
+    "brother": ["brother"], // Map chính nó để kích hoạt logic so khớp chính xác
 
     // --- CÁC FIX CŨ ---
     "from": ["bẫy"], 
@@ -102,10 +102,11 @@ function getHPKeywords(originalName) {
     return null;
 }
 
+// Cải tiến Normalization: Thêm ? , vào danh sách loại bỏ
 function normalizeForSearch(title) {
     return title.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, "") 
-        .replace(/['":\-.()\[\]]/g, " ") 
+        .replace(/['":\-.()\[\]?,]/g, " ") // Thêm dấu ? và ,
         .replace(/\s+/g, " ")
         .trim();
 }
@@ -223,6 +224,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const cleanName = normalizeForSearch(originalName);
     if (cleanName !== lowerName) queries.push(cleanName);
 
+    // Common Fixes
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
         const splitClean = normalizeForSearch(splitName);
@@ -257,34 +259,34 @@ builder.defineStreamHandler(async ({ type, id }) => {
     // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. GOLDEN MATCH
+    // 2. GOLDEN MATCH (Fix Brother vs O Brother)
     if (matchedCandidates.length > 1 && !isHarryPotter) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
             let mClean = normalizeForSearch(m.name);
             mClean = mClean.replace(year.toString(), "").trim();
+            // Nếu khớp 100% tên (Brother == Brother) thì lấy, bỏ qua O Brother...
             return mClean === oClean;
         });
 
         if (goldenMatches.length > 0) {
-            console.log(`-> (v31) Golden Match Found! Chỉ giữ lại phim khớp chính xác.`);
+            console.log(`-> (v31) Golden Match Found! Giữ lại chính chủ, loại bỏ phim tên dài hơn.`);
             matchedCandidates = goldenMatches;
         }
     }
 
-    // 3. Exact Year Check
+    // 3. Fallback Year Check
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // 4. SHORT TITLE ISOLATION (From, It, Us)
+    // 4. SHORT TITLE ISOLATION (Fix From, It, Us...)
     if (cleanName.length <= 5 && matchedCandidates.length > 0) {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
             const qClean = normalizeForSearch(originalName);
 
-            // LOGIC "BẢO KÊ" MAPPING
             if (mappedVietnameseList.length > 0) {
                 const matchesMap = mappedVietnameseList.some(map => {
                     const mapClean = normalizeForSearch(map);
@@ -293,13 +295,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 if (matchesMap) return true;
             }
 
-            // LOGIC "ISOLATION"
             const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
             const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
             const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
 
             if (endsWithExact || isExact || startsWithExact) return true;
-
             return false;
         });
     }
