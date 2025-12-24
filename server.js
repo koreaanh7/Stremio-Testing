@@ -18,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v31",
     version: "31.0.0",
-    name: "Phim4K VIP (Single Word Precision)",
-    description: "Fix Brother/O Brother & Single Word title mismatches",
+    name: "Phim4K VIP (The Coen Brothers Fix)",
+    description: "Fix O Brother Where Art Thou, Brother conflict",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,13 +28,14 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX LOGIC MỚI ---
-    "brother": ["người anh em", "nguoi anh em"], // Thêm Brother
+    // --- FIX MỚI ---
+    "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"], // Map về tên Việt độc nhất
+    "brother": ["brother"], // Giữ nguyên Brother để tránh bị map nhầm sang O Brother
+
+    // --- CÁC FIX CŨ ---
     "from": ["bẫy"], 
     "dexter: original sin": ["dexter original sin", "dexter trọng tội", "dexter sát thủ"],
     "oppenheimer": ["oppenheimer"], 
-    
-    // --- CÁC FIX CŨ ---
     "12 monkeys": ["12 con khỉ", "twelve monkeys"],
     "it": ["gã hề ma quái"],
     "up": ["vút bay"],
@@ -161,7 +162,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
-        // Tăng giới hạn strict check lên 4 để cover các từ rất ngắn
         if (qClean.length <= 4) {
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
             if (strictRegex.test(serverClean)) return true;
@@ -257,7 +257,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. GOLDEN MATCH (Oppenheimer)
+    // 2. GOLDEN MATCH
     if (matchedCandidates.length > 1 && !isHarryPotter) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
@@ -272,22 +272,19 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
     }
 
-    // 3. Fallback Year Check
+    // 3. Exact Year Check
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // 4. SINGLE WORD / SHORT TITLE PRECISION (Fix Brother vs O Brother)
-    const isSingleWord = !cleanName.includes(" ");
-    
-    // Áp dụng logic chặt chẽ nếu: Tên ngắn (<=5) HOẶC Là từ đơn dưới 10 ký tự (Brother, Monster...)
-    if ((cleanName.length <= 5 || (isSingleWord && cleanName.length <= 10)) && matchedCandidates.length > 0) {
+    // 4. SHORT TITLE ISOLATION (From, It, Us)
+    if (cleanName.length <= 5 && matchedCandidates.length > 0) {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
             const qClean = normalizeForSearch(originalName);
 
-            // a. Ưu tiên Mapping tiếng Việt (Bẫy, Người Anh Em...)
+            // LOGIC "BẢO KÊ" MAPPING
             if (mappedVietnameseList.length > 0) {
                 const matchesMap = mappedVietnameseList.some(map => {
                     const mapClean = normalizeForSearch(map);
@@ -296,16 +293,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 if (matchesMap) return true;
             }
 
-            // b. Logic "Chính chủ" (Identity Check)
-            // Phim gốc: "Brother"
-            // Phim server: "... O Brother Where Art Thou" (Kết thúc bằng "thou" -> REJECT)
-            // Phim server: "Nguoi Anh Em (2000) Brother" (Kết thúc bằng "brother" -> ACCEPT)
-            
-            // Regex: Kết thúc CHÍNH XÁC bằng tên phim (có dấu cách trước hoặc là duy nhất)
+            // LOGIC "ISOLATION"
             const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
             const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
-            
-            // Regex: Bắt đầu CHÍNH XÁC (Trường hợp "Brother (2000) ...")
             const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
 
             if (endsWithExact || isExact || startsWithExact) return true;
