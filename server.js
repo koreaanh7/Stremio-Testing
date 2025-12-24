@@ -18,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v31",
     version: "31.0.0",
-    name: "Phim4K VIP (Boundary Guard)",
-    description: "Fix 'Brother' vs 'O Brother' & Strict Word Boundaries",
+    name: "Phim4K VIP (Title Segmentation)",
+    description: "Fix 'Brother' vs 'O Brother' using Title Segmentation logic",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -30,7 +30,7 @@ const builder = new addonBuilder({
 const VIETNAMESE_MAPPING = {
     "from": ["bẫy"], 
     "dexter: original sin": ["dexter original sin", "dexter trọng tội", "dexter sát thủ"],
-    "brother": ["hào khí anh hùng", "người anh em"], // Mapping cho Brother (2000)
+    "brother": ["người anh em"], // Thêm mapping cho phim Brother (2000)
     "oppenheimer": ["oppenheimer"], 
     "12 monkeys": ["12 con khỉ", "twelve monkeys"],
     "it": ["gã hề ma quái"],
@@ -101,7 +101,7 @@ function getHPKeywords(originalName) {
 function normalizeForSearch(title) {
     return title.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, "") 
-        .replace(/['":\-.()\[\]?,!]/g, " ") // Xóa cả ?,! cho trường hợp "Where Art Thou?"
+        .replace(/['":\-.()\[\]]/g, " ") 
         .replace(/\s+/g, " ")
         .trim();
 }
@@ -117,14 +117,16 @@ function extractEpisodeInfo(filename) {
     return null;
 }
 
+// === CORE LOGIC v31: TITLE SEGMENTATION ===
 function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseList, queries) {
     if (candidate.type && candidate.type !== type) return false;
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
+    // HP Override
     if (serverClean.includes("harry potter colection") && originalName.toLowerCase().includes("harry potter")) return true;
 
-    // Year Check
+    // 1. Year Check (Bắt buộc phải khớp năm)
     let yearMatch = false;
     if (!hasYear) yearMatch = true;
     else {
@@ -141,30 +143,76 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // Check Mapping
-    if (mappedVietnameseList && mappedVietnameseList.length > 0) {
-        for (const mappedVietnamese of mappedVietnameseList) {
-            const mappedClean = normalizeForSearch(mappedVietnamese);
-            if (mappedClean.length <= 3) {
-                const strictRegex = new RegExp(`(^|\\s|\\W)${mappedClean}($|\\s|\\W)`, 'i');
-                if (strictRegex.test(serverClean)) return true;
-            } else {
-                if (serverClean.includes(mappedClean)) return true;
+    // 2. SEGMENTATION STRATEGY (Chia để trị)
+    // Cố gắng tách tên Server thành 2 phần dựa vào Năm
+    // VD: "3 Kẻ Trốn Tù (2000) O Brother Where Art Thou" -> Part1: "3 ke tron tu", Part2: "o brother..."
+    
+    // Tìm vị trí năm trong chuỗi đã clean
+    const yearStr = year.toString();
+    const splitRegex = new RegExp(`(^|\\s|\\W)${yearStr}($|\\s|\\W)`);
+    const splitMatch = serverClean.match(splitRegex);
+
+    if (splitMatch) {
+        const splitIndex = splitMatch.index;
+        const part1 = serverClean.substring(0, splitIndex).trim();
+        const part2 = serverClean.substring(splitIndex + splitMatch[0].length).trim();
+        
+        // Check từng Query
+        for (const query of queries) {
+            const qClean = normalizeForSearch(query);
+            
+            // Check Part 1 (Thường là tên Tiếng Việt hoặc tên đầu): Cho phép tìm tương đối (includes)
+            // Để bắt được mapping: "Bẫy" trong "Bẫy (2022)"
+            if (part1.includes(qClean)) return true;
+
+            // Check Part 2 (Thường là tên Tiếng Anh gốc): Yêu cầu KHẮT KHE
+            // Nếu Part 2 chứa query, nhưng Part 2 dài hơn Query nhiều -> TỪ CHỐI
+            // VD: Part2="o brother where art thou", Query="brother" -> REJECT
+            // VD: Part2="oppenheimer", Query="oppenheimer" -> ACCEPT
+            if (part2.includes(qClean)) {
+                // Nếu khớp chính xác hoặc gần chính xác
+                if (part2 === qClean) return true;
+                
+                // Nếu query nằm ở cuối (VD: "Ten Viet (Nam) Ten Anh")
+                // Và độ lệch độ dài không quá lớn (tránh trường hợp Brother nằm trong O Brother)
+                const diff = part2.length - qClean.length;
+                if (diff < 3) return true; // Chênh lệch ít -> OK (VD do dấu câu)
+
+                // LOGIC QUAN TRỌNG CHO "BROTHER":
+                // Nếu Query là từ đơn, và Part 2 chứa Query nhưng còn nhiều từ khác -> Bỏ qua
+                // Tuy nhiên, phải cẩn thận với Mapping Tiếng Việt.
+                // Ở đây ta đang check Part 2 (Tiếng Anh).
+                // Nếu mapping Tiếng Việt khớp Part 1 rồi thì đã return true ở trên.
+                // Xuống đến đây nghĩa là đang so sánh Tên Tiếng Anh với Phần Tiếng Anh.
+                // -> Yêu cầu phải khớp gần tuyệt đối.
             }
+        }
+        return false; // Nếu tách được năm mà không khớp phần nào theo logic trên -> Loại
+    }
+
+    // 3. Fallback (Nếu không tìm thấy năm để tách, hoặc định dạng lạ)
+    // Dùng logic cũ nhưng có kiểm tra Mapping
+    if (mappedVietnameseList && mappedVietnameseList.length > 0) {
+        for (const map of mappedVietnameseList) {
+            const mapClean = normalizeForSearch(map);
+            if (serverClean.includes(mapClean)) return true;
         }
     }
 
-    // Check Queries
+    // Check Queries (Fallback)
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
-        // Tăng độ khó cho match cơ bản: nếu query ngắn, bắt buộc phải match word boundary
-        if (qClean.length <= 4) {
+        // Nếu query ngắn, yêu cầu Word Boundary
+        if (qClean.length <= 5) {
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
             if (strictRegex.test(serverClean)) return true;
         } else {
-            if (serverClean.includes(qClean)) return true;
+            // Với Brother (len=7), nếu fallback xuống đây thì vẫn dùng includes.
+            // Nhưng hầu hết Phim4K đều có năm, nên sẽ dính vào Logic 2 ở trên.
+             if (serverClean.includes(qClean)) return true;
         }
     }
+
     return false;
 }
 
@@ -253,24 +301,17 @@ builder.defineStreamHandler(async ({ type, id }) => {
     // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. GOLDEN MATCH (Oppenheimer, Brother)
-    // Mở rộng logic: Nếu tìm thấy tên phim match 100% (sau khi xóa năm và tiếng Việt thừa), lấy ngay.
+    // 2. GOLDEN MATCH
     if (matchedCandidates.length > 1 && !isHarryPotter) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
             let mClean = normalizeForSearch(m.name);
-            mClean = mClean.replace(year.toString(), "").trim(); // Xóa năm
-            // Nếu tên server == tên gốc -> Chuẩn 100%
-            if (mClean === oClean) return true; 
-            
-            // Nếu tên server kết thúc bằng tên gốc (Vd: "Hào Khí Anh Hùng Brother") -> Chuẩn
-            if (mClean.endsWith(` ${oClean}`)) return true;
-
-            return false;
+            mClean = mClean.replace(year.toString(), "").trim();
+            return mClean === oClean;
         });
 
         if (goldenMatches.length > 0) {
-            console.log(`-> (v31) Golden Match Found!`);
+            console.log(`-> (v31) Golden Match Found! Chỉ giữ lại phim khớp chính xác.`);
             matchedCandidates = goldenMatches;
         }
     }
@@ -279,42 +320,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
-    }
-
-    // 4. BOUNDARY GUARD (FIX "Brother" vs "O Brother", "From", "It", "Us")
-    // Nâng ngưỡng kiểm tra lên <= 10 ký tự (đủ bao gồm Brother, Monster...)
-    if (cleanName.length <= 10 && matchedCandidates.length > 0) {
-        matchedCandidates = matchedCandidates.filter(m => {
-            const mClean = normalizeForSearch(m.name);
-            const qClean = normalizeForSearch(originalName); // "brother"
-
-            // LOGIC ƯU TIÊN MAPPING
-            if (mappedVietnameseList.length > 0) {
-                const matchesMap = mappedVietnameseList.some(map => {
-                    const mapClean = normalizeForSearch(map);
-                    return mClean.includes(mapClean);
-                });
-                if (matchesMap) return true; // VD: "Hào Khí Anh Hùng" -> OK
-            }
-
-            // LOGIC KIỂM TRA BIÊN (BOUNDARY)
-            // Nếu tên phim ngắn (1 từ), nó PHẢI nằm ở cuối câu hoặc đầu câu (tách biệt)
-            // Không được nằm giữa như "O Brother Where..."
-            
-            // Regex: Kiểm tra xem mClean có KẾT THÚC bằng " brother" không?
-            const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
-            
-            // Regex: Kiểm tra xem mClean có BẰNG "brother" hoặc "brother (năm)" không
-            const isExact = mClean === qClean || mClean === `${qClean} ${year}` || mClean === `${year} ${qClean}`;
-            
-            // Regex: Bắt đầu bằng "brother " (ít gặp nhưng cứ thêm)
-            const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
-
-            if (endsWithExact || isExact || startsWithExact) return true;
-
-            // Nếu không thỏa mãn các điều kiện biên trên -> LOẠI (Chặn "O Brother Where Art Thou")
-            return false;
-        });
     }
 
     if (matchedCandidates.length === 0) return { streams: [] };
