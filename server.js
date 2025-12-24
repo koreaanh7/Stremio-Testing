@@ -16,10 +16,10 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v30",
-    version: "30.0.0",
-    name: "Phim4K VIP (Identity Isolator)",
-    description: "Fix common words (From, It, Us) matching partial titles",
+    id: "com.phim4k.vip.final.v31",
+    version: "31.0.0",
+    name: "Phim4K VIP (Strict Gatekeeper)",
+    description: "Fix Brother, From, It, Us mixing with similar titles. Expanded Strict Mode.",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -31,6 +31,7 @@ const VIETNAMESE_MAPPING = {
     "from": ["bẫy"], 
     "dexter: original sin": ["dexter original sin", "dexter trọng tội", "dexter sát thủ"],
     "oppenheimer": ["oppenheimer"], 
+    "brother": ["người anh em"], // Thêm mapping nếu cần, nhưng logic v31 tự xử lý được
     "12 monkeys": ["12 con khỉ", "twelve monkeys"],
     "it": ["gã hề ma quái"],
     "up": ["vút bay"],
@@ -140,11 +141,10 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // Check Mapping
+    // Mapping Check
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
-            // Strict check for short mapping (Bay vs Baymax)
             if (mappedClean.length <= 3) {
                 const strictRegex = new RegExp(`(^|\\s|\\W)${mappedClean}($|\\s|\\W)`, 'i');
                 if (strictRegex.test(serverClean)) return true;
@@ -154,9 +154,10 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         }
     }
 
-    // Check Queries
+    // Query Check
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
+        // Nếu query ngắn, dùng Regex boundary để tránh match nhầm từ con
         if (qClean.length <= 4) {
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
             if (strictRegex.test(serverClean)) return true;
@@ -218,6 +219,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const cleanName = normalizeForSearch(originalName);
     if (cleanName !== lowerName) queries.push(cleanName);
 
+    // Tách subtitle nếu có
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
         const splitClean = normalizeForSearch(splitName);
@@ -228,7 +230,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v30): "${originalName}" (${year}) | Type: ${type} ===`);
+    console.log(`\n=== Xử lý (v31): "${originalName}" (${year}) | Type: ${type} ===`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -249,20 +251,21 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
 
-    // 1. Subtitle Check (Dexter)
+    // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. GOLDEN MATCH (Oppenheimer)
+    // 2. GOLDEN MATCH (Oppenheimer, Brother)
     if (matchedCandidates.length > 1 && !isHarryPotter) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
             let mClean = normalizeForSearch(m.name);
             mClean = mClean.replace(year.toString(), "").trim();
+            // Nếu tên server == tên gốc -> Match tuyệt đối
             return mClean === oClean;
         });
 
         if (goldenMatches.length > 0) {
-            console.log(`-> (v30) Golden Match Found! Chỉ giữ lại phim khớp chính xác.`);
+            console.log(`-> (v31) Golden Match Found!`);
             matchedCandidates = goldenMatches;
         }
     }
@@ -273,34 +276,33 @@ builder.defineStreamHandler(async ({ type, id }) => {
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // 4. SHORT TITLE ISOLATION (FIX "FROM", "IT", "US")
-    if (cleanName.length <= 5 && matchedCandidates.length > 0) {
+    // 4. STRICT GATEKEEPER (Fix Brother, From, It, Us)
+    // Tăng giới hạn từ 5 lên 9 ký tự để bao trùm cả "Brother"
+    if (cleanName.length <= 9 && matchedCandidates.length > 0) {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
-            const qClean = normalizeForSearch(originalName);
+            const qClean = normalizeForSearch(originalName); // "brother"
 
-            // LOGIC "BẢO KÊ" (Nếu khớp Mapping tiếng Việt thì cho qua luôn)
+            // A. ƯU TIÊN MAPPING VIỆT (Nếu khớp tên Việt thì luôn đúng)
             if (mappedVietnameseList.length > 0) {
                 const matchesMap = mappedVietnameseList.some(map => {
                     const mapClean = normalizeForSearch(map);
                     return mClean.includes(mapClean);
                 });
-                if (matchesMap) return true; // VD: "Bẫy" khớp -> OK
+                if (matchesMap) return true;
             }
 
-            // LOGIC "ISOLATION" (Nếu không khớp tiếng Việt, bắt buộc phải khớp tên tiếng Anh ĐỘC LẬP)
-            // Phim4K thường có format: "Vietnamese Title (Year) English Title"
-            // Ta kiểm tra xem tên server có KẾT THÚC chính xác bằng tên phim gốc không.
-            // VD: "Bay (2022) FROM" -> Ends with " from" -> OK
-            // VD: "In From the Cold" -> Ends with " cold" -> FAIL
-            // VD: "From Now On" -> Ends with " on" -> FAIL
-
-            // Regex: Kiểm tra xem chuỗi có kết thúc bằng " từ_khóa" không (có dấu cách trước)
-            // Hoặc chuỗi chính là từ khóa (trường hợp tên server chỉ có tiếng Anh)
+            // B. STRICT ENGLISH CHECK
+            // Phim4K format: "Tên Việt (Năm) Tên Anh"
+            // Kiểm tra: Tên server có KẾT THÚC CHÍNH XÁC bằng tên gốc không?
+            // "O Brother Where Art Thou" -> Kết thúc bằng "thou" -> FAIL
+            // "Nguoi Anh Em Brother" -> Kết thúc bằng "brother" -> PASS
             const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
+            
+            // Trường hợp tên server chỉ có mỗi tên gốc
             const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
             
-            // Một số trường hợp tên tiếng Anh nằm đầu: "From (2022) Bẫy" (ít gặp nhưng đề phòng)
+            // Trường hợp tên Anh đứng đầu (hiếm nhưng có): "Brother (2000) Người Anh Em"
             const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
 
             if (endsWithExact || isExact || startsWithExact) return true;
