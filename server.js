@@ -16,10 +16,10 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v31",
-    version: "31.0.0",
-    name: "Phim4K VIP (Brotherhood Fix)",
-    description: "Fix O Brother vs Brother, Expanded Isolation Logic",
+    id: "com.phim4k.vip.final.v32",
+    version: "32.0.0",
+    name: "Phim4K VIP (Dict Update)",
+    description: "Added 9 (2009) & The NeverEnding Story",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,11 +28,13 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX MỚI (BROTHERHOOD) ---
-    "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"],
-    "brother": ["brother", "lão đại", "người anh em"], // Mapping cho phim Brother (2000) của Kitano hoặc phim khác
+    // --- FIX MỚI (V32) ---
+    "9": ["chiến binh số 9", "9"], // Fix phim hoạt hình 9
+    "the neverending story": ["câu chuyện bất tận"], // Fix phim thiếu tên Anh
 
-    // --- CÁC FIX CŨ ---
+    // --- FIX CŨ ---
+    "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"],
+    "brother": ["brother", "lão đại", "người anh em"],
     "from": ["bẫy"], 
     "dexter: original sin": ["dexter original sin", "dexter trọng tội", "dexter sát thủ"],
     "oppenheimer": ["oppenheimer"], 
@@ -105,7 +107,7 @@ function getHPKeywords(originalName) {
 function normalizeForSearch(title) {
     return title.toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, "") 
-        .replace(/['":\-.()\[\]?,]/g, " ") // Thêm dấu ? và , vào danh sách loại bỏ
+        .replace(/['":\-.()\[\]?,]/g, " ") 
         .replace(/\s+/g, " ")
         .trim();
 }
@@ -162,7 +164,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
-        // Tăng giới hạn strict check lên 9 ký tự (Để cover "Brother" = 7 ký tự)
+        // Tăng giới hạn strict check lên 9 ký tự
         if (qClean.length <= 9) {
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
             if (strictRegex.test(serverClean)) return true;
@@ -234,7 +236,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v31): "${originalName}" (${year}) | Type: ${type} ===`);
+    console.log(`\n=== Xử lý (v32): "${originalName}" (${year}) | Type: ${type} ===`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -267,7 +269,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return mClean === oClean;
         });
         if (goldenMatches.length > 0) {
-            console.log(`-> (v31) Golden Match Found!`);
+            console.log(`-> (v32) Golden Match Found!`);
             matchedCandidates = goldenMatches;
         }
     }
@@ -278,8 +280,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // 4. EXTENDED ISOLATION (FIX BROTHER vs O BROTHER)
-    // Tăng giới hạn từ 5 lên 9 ký tự để cover "Brother"
+    // 4. EXTENDED ISOLATION
     if (cleanName.length <= 9 && matchedCandidates.length > 0) {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
@@ -295,11 +296,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
             }
 
             // ISOLATION (CÁCH LY)
-            // Phim4K format: "VN (Year) EN"
-            // Kiểm tra xem tên Server có KẾT THÚC bằng tên gốc không?
             const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
             const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
-            const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean); // Phòng hờ format ngược
+            const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
 
             if (endsWithExact || isExact || startsWithExact) return true;
 
