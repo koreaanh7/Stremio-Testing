@@ -16,10 +16,10 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v32",
-    version: "32.0.0",
-    name: "Phim4K VIP (Dict Update)",
-    description: "Added 9 (2009) & The NeverEnding Story",
+    id: "com.phim4k.vip.final.v33",
+    version: "33.0.0",
+    name: "Phim4K VIP (Strict Series)",
+    description: "Added Shadow, Boss, Flow & Fix Taxi Driver mixing seasons",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,11 +28,15 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX MỚI (V32) ---
-    "9": ["chiến binh số 9", "9"], // Fix phim hoạt hình 9
-    "the neverending story": ["câu chuyện bất tận"], // Fix phim thiếu tên Anh
+    // --- FIX MỚI (V33) ---
+    "shadow": ["vô ảnh"],
+    "boss": ["đại ca ha ha ha", "boss"],
+    "flow": ["lạc trôi", "straume"],
+    "taxi driver": ["tài xế ẩn danh", "taxi driver"], // Map thêm cho chắc
 
-    // --- FIX CŨ ---
+    // --- CÁC FIX CŨ ---
+    "9": ["chiến binh số 9", "9"],
+    "the neverending story": ["câu chuyện bất tận"],
     "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"],
     "brother": ["brother", "lão đại", "người anh em"],
     "from": ["bẫy"], 
@@ -236,7 +240,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v32): "${originalName}" (${year}) | Type: ${type} ===`);
+    console.log(`\n=== Xử lý (v33): "${originalName}" (${year}) | Type: ${type} ===`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -269,7 +273,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return mClean === oClean;
         });
         if (goldenMatches.length > 0) {
-            console.log(`-> (v32) Golden Match Found!`);
+            console.log(`-> (v33) Golden Match Found!`);
             matchedCandidates = goldenMatches;
         }
     }
@@ -285,8 +289,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
             const qClean = normalizeForSearch(originalName);
-
-            // BẢO KÊ (Mapping)
             if (mappedVietnameseList.length > 0) {
                 const matchesMap = mappedVietnameseList.some(map => {
                     const mapClean = normalizeForSearch(map);
@@ -294,14 +296,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 });
                 if (matchesMap) return true;
             }
-
-            // ISOLATION (CÁCH LY)
             const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
             const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
             const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
-
             if (endsWithExact || isExact || startsWithExact) return true;
-
             return false;
         });
     }
@@ -341,12 +339,31 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const metaUrl = `${TARGET_BASE_URL}/meta/${type}/${encodeURIComponent(fullId)}.json`;
                 const metaRes = await axios.get(metaUrl, { headers: HEADERS });
                 if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) return [];
+                
+                // --- LOGIC LỌC VIDEO MỚI ---
                 const matchedVideos = metaRes.data.meta.videos.filter(vid => {
                     const info = extractEpisodeInfo(vid.title || vid.name || "");
                     if (!info) return false;
-                    if (info.s === 0) return info.e === episode; 
+
+                    // Xử lý trường hợp file không ghi Season (info.s === 0)
+                    if (info.s === 0) {
+                        // Anime dài tập (Naruto, One Piece...) -> Chấp nhận hết
+                        if (/naruto|one piece|bleach|fairytail|conan/i.test(originalName)) {
+                            return info.e === episode;
+                        }
+                        
+                        // Phim bộ thường (Taxi Driver):
+                        // Nếu đang tìm Season > 1 mà file lại là S=0 -> LOẠI BỎ (Tránh lấy Ep01 của SS1 nhét vào SS2)
+                        if (season > 1) return false;
+
+                        // Nếu tìm Season 1 -> Chấp nhận
+                        return info.e === episode;
+                    }
+
+                    // Trường hợp chuẩn (có Season, có Episode)
                     return info.s === season && info.e === episode;
                 });
+
                 let episodeStreams = [];
                 for (const vid of matchedVideos) {
                     const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(vid.id)}.json`;
