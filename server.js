@@ -18,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v33",
     version: "33.0.0",
-    name: "Phim4K VIP (Strict Series)",
-    description: "Added Shadow, Boss, Flow & Fix Taxi Driver mixing seasons",
+    name: "Phim4K VIP (Strict Identity & Season Fix)",
+    description: "Fix Shadow/Flow priority & Taxi Driver S2 mixing S1",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -29,13 +29,13 @@ const builder = new addonBuilder({
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
     // --- FIX MỚI (V33) ---
-    "shadow": ["vô ảnh"],
-    "boss": ["đại ca ha ha ha", "boss"],
-    "flow": ["lạc trôi", "straume"],
-    "taxi driver": ["tài xế ẩn danh", "taxi driver"], // Map thêm cho chắc
+    "shadow": ["vô ảnh"], // Shadow (2018) -> Vô ảnh
+    "boss": ["đại ca ha ha ha"], // Boss (2025)
+    "flow": ["lạc trôi", "straume"], // Flow (2024) -> Lạc trôi
+    "taxi driver": ["tài xế ẩn danh", "taxi driver"], // Fix phim bộ
 
-    // --- CÁC FIX CŨ ---
-    "9": ["chiến binh số 9", "9"],
+    // --- FIX CŨ ---
+    "9": ["chiến binh số 9", "9"], 
     "the neverending story": ["câu chuyện bất tận"],
     "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"],
     "brother": ["brother", "lão đại", "người anh em"],
@@ -155,7 +155,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
-            // Strict check for short mapping (Bay vs Baymax)
             if (mappedClean.length <= 3) {
                 const strictRegex = new RegExp(`(^|\\s|\\W)${mappedClean}($|\\s|\\W)`, 'i');
                 if (strictRegex.test(serverClean)) return true;
@@ -168,7 +167,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
-        // Tăng giới hạn strict check lên 9 ký tự
         if (qClean.length <= 9) {
             const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
             if (strictRegex.test(serverClean)) return true;
@@ -264,7 +262,22 @@ builder.defineStreamHandler(async ({ type, id }) => {
     // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. GOLDEN MATCH
+    // 2. VIETNAMESE PRIORITY FILTER (New in v33)
+    // Nếu có mapping tiếng Việt VÀ tìm thấy kết quả khớp mapping đó -> CHỈ GIỮ LẠI kết quả khớp mapping.
+    // Logic này giúp "Shadow" -> lấy "Vô ảnh", bỏ "Shadow". "Flow" -> lấy "Lạc trôi".
+    if (mappedVietnameseList.length > 0) {
+        const strictVietnameseMatches = matchedCandidates.filter(m => {
+            const mClean = normalizeForSearch(m.name);
+            return mappedVietnameseList.some(map => mClean.includes(normalizeForSearch(map)));
+        });
+        
+        if (strictVietnameseMatches.length > 0) {
+            console.log(`-> (v33) Priority: Tìm thấy tên tiếng Việt ưu tiên. Loại bỏ các kết quả tiếng Anh không khớp.`);
+            matchedCandidates = strictVietnameseMatches;
+        }
+    }
+
+    // 3. Golden Match & Fallback Year (Standard Logic)
     if (matchedCandidates.length > 1 && !isHarryPotter) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
@@ -272,19 +285,18 @@ builder.defineStreamHandler(async ({ type, id }) => {
             mClean = mClean.replace(year.toString(), "").trim();
             return mClean === oClean;
         });
-        if (goldenMatches.length > 0) {
-            console.log(`-> (v33) Golden Match Found!`);
-            matchedCandidates = goldenMatches;
+        // Chỉ dùng Golden Match nếu chưa bị filter bởi Priority ở trên
+        // (Nếu Priority đã chạy, danh sách đã chuẩn, không cần Golden Match đè lại)
+        if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) {
+             // Logic phụ trợ
         }
     }
-
-    // 3. Fallback Year Check
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // 4. EXTENDED ISOLATION
+    // 4. Extended Isolation
     if (cleanName.length <= 9 && matchedCandidates.length > 0) {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
@@ -299,8 +311,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
             const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
             const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
             const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
-            if (endsWithExact || isExact || startsWithExact) return true;
-            return false;
+            return endsWithExact || isExact || startsWithExact;
         });
     }
 
@@ -339,28 +350,18 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const metaUrl = `${TARGET_BASE_URL}/meta/${type}/${encodeURIComponent(fullId)}.json`;
                 const metaRes = await axios.get(metaUrl, { headers: HEADERS });
                 if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) return [];
-                
-                // --- LOGIC LỌC VIDEO MỚI ---
+
+                // Lọc danh sách Video từ Metadata
                 const matchedVideos = metaRes.data.meta.videos.filter(vid => {
                     const info = extractEpisodeInfo(vid.title || vid.name || "");
                     if (!info) return false;
-
-                    // Xử lý trường hợp file không ghi Season (info.s === 0)
+                    
+                    // FIX TAXI DRIVER:
+                    // Nếu tập phim là s:0 (chỉ có Ep01), nó chỉ được chấp nhận nếu User đang yêu cầu Season 1.
+                    // Nếu User yêu cầu Season 2, các tập s:0 sẽ bị loại bỏ.
                     if (info.s === 0) {
-                        // Anime dài tập (Naruto, One Piece...) -> Chấp nhận hết
-                        if (/naruto|one piece|bleach|fairytail|conan/i.test(originalName)) {
-                            return info.e === episode;
-                        }
-                        
-                        // Phim bộ thường (Taxi Driver):
-                        // Nếu đang tìm Season > 1 mà file lại là S=0 -> LOẠI BỎ (Tránh lấy Ep01 của SS1 nhét vào SS2)
-                        if (season > 1) return false;
-
-                        // Nếu tìm Season 1 -> Chấp nhận
-                        return info.e === episode;
+                        return season === 1 && info.e === episode;
                     }
-
-                    // Trường hợp chuẩn (có Season, có Episode)
                     return info.s === season && info.e === episode;
                 });
 
@@ -368,13 +369,23 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 for (const vid of matchedVideos) {
                     const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(vid.id)}.json`;
                     const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
+                    
                     if (sRes.data && sRes.data.streams) {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
                             const streamInfo = extractEpisodeInfo(streamTitle);
-                            if (streamInfo && streamInfo.s !== 0) {
-                                if (streamInfo.s !== season || streamInfo.e !== episode) return;
+                            
+                            // Check lần 2 trong Stream Title (để chắc chắn)
+                            if (streamInfo) {
+                                if (streamInfo.s === 0) {
+                                     // Nếu stream title là s:0, chỉ lấy nếu đang tìm season 1
+                                     if (season !== 1) return;
+                                } else {
+                                     if (streamInfo.s !== season) return;
+                                }
+                                if (streamInfo.e !== episode) return;
                             }
+                            
                             episodeStreams.push({
                                 name: `Phim4K S${season}E${episode}`,
                                 title: (s.title || vid.title) + `\n[${match.name}]`,
