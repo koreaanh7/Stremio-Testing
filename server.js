@@ -17,21 +17,24 @@ const HEADERS = {
 
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v34",
-    version: "34.0.1",
-    name: "Phim4K VIP (UA Full Inject)",
-    description: "Fix Shadow/Flow/TaxiDriver + Inject KSPlayer UA (Headers & ProxyHeaders)",
+    version: "34.0.0",
+    name: "Phim4K VIP (UA Proxy Fix)",
+    description: "Based on v33, added ProxyHeaders for KSPlayer",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MAPPING (Giữ nguyên v33) ===
+// === 1. TỪ ĐIỂN MAPPING (GIỮ NGUYÊN TỪ V33) ===
 const VIETNAMESE_MAPPING = {
+    // --- FIX PRIORITY (V33) ---
     "shadow": ["vô ảnh"], 
     "boss": ["đại ca ha ha ha"], 
     "flow": ["lạc trôi", "straume"], 
     "taxi driver": ["tài xế ẩn danh", "taxi driver"],
+
+    // --- CÁC FIX KHÁC ---
     "9": ["chiến binh số 9", "9"], 
     "the neverending story": ["câu chuyện bất tận"],
     "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"],
@@ -91,7 +94,7 @@ const VIETNAMESE_MAPPING = {
     "naruto": ["naruto"]
 };
 
-// --- UTILS (Giữ nguyên v33) ---
+// --- UTILS ---
 function getHPKeywords(originalName) {
     const name = originalName.toLowerCase();
     if (name.includes("sorcerer") || name.includes("philosopher")) return ["philosopher", "sorcerer", "hòn đá", " 1 "];
@@ -259,7 +262,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. VIETNAMESE PRIORITY FILTER
+    // 2. VIETNAMESE PRIORITY FILTER (Logic từ v33)
     if (mappedVietnameseList.length > 0) {
         const strictVietnameseMatches = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
@@ -280,7 +283,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return mClean === oClean;
         });
         if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) {
-             // Logic
+            // Priority logic
         }
     }
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
@@ -331,9 +334,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
                             return hasKeyword;
                         });
                     }
-                    // === THAY ĐỔI 1: INJECT UA CHO MOVIE ===
+                    
+                    // [MODIFIED FOR V34]
                     return streams.map(s => {
+                        // [THÊM] Log để debug
                         console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Movie: ${s.title || s.name}`);
+                        
                         return {
                             name: "Phim4K VIP", 
                             title: s.title || s.name,
@@ -355,7 +361,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const matchedVideos = metaRes.data.meta.videos.filter(vid => {
                     const info = extractEpisodeInfo(vid.title || vid.name || "");
                     if (!info) return false;
-                    // FIX TAXI DRIVER
+                    // FIX TAXI DRIVER (Logic từ v33)
                     if (info.s === 0) return season === 1 && info.e === episode;
                     return info.s === season && info.e === episode;
                 });
@@ -375,8 +381,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 if (streamInfo.e !== episode) return;
                             }
                             
-                            // === THAY ĐỔI 2: INJECT UA CHO SERIES ===
-                            console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Series: ${s.title || s.name}`);
+                            // [MODIFIED FOR V34]
+                            console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Series: ${s.title}`);
+
                             episodeStreams.push({
                                 name: `Phim4K S${season}E${episode}`,
                                 title: (s.title || vid.title) + `\n[${match.name}]`,
@@ -384,6 +391,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 behaviorHints: { 
                                     notWebReady: false, 
                                     bingeGroup: "phim4k-vip",
+                                    // [THÊM MỚI] Dòng này ép User Agent:
                                     proxyHeaders: { request: { "User-Agent": "KSPlayer/1.0" } },
                                     headers: { "User-Agent": "KSPlayer/1.0" }
                                 }
