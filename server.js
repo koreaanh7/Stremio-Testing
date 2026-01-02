@@ -1,3 +1,10 @@
+Chào bạn, việc fake `User-Agent` cho Player là một kỹ thuật rất hay để vượt qua một số cơ chế chặn của server cung cấp link (hoặc để tối ưu luồng stream). Trong Stremio, ta thực hiện việc này bằng cách thêm thuộc tính `headers` vào trong object `behaviorHints` của kết quả trả về.
+
+Đây là **Phiên bản v34**, mình đã thêm header `User-Agent: KSPlayer/1.0` vào cả phần Movie và Series.
+
+### CẬP NHẬT `server.js` (Phiên bản v34 - Final Stable)
+
+```javascript
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require("axios");
 
@@ -11,15 +18,16 @@ if (!TARGET_MANIFEST_URL) {
 const getBaseUrl = (url) => url.replace('/manifest.json', '');
 const TARGET_BASE_URL = getBaseUrl(TARGET_MANIFEST_URL);
 
+// Headers dùng để gọi API tìm kiếm (Backend)
 const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v33",
-    version: "33.0.0",
-    name: "Phim4K VIP (Strict Identity & Season Fix)",
-    description: "Fix Shadow/Flow priority & Taxi Driver S2 mixing S1",
+    id: "com.phim4k.vip.final.v34",
+    version: "34.0.0",
+    name: "Phim4K VIP (UA Fix)",
+    description: "Added User-Agent: KSPlayer/1.0 for Player",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,11 +36,11 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX MỚI (V33) ---
-    "shadow": ["vô ảnh"], // Shadow (2018) -> Vô ảnh
-    "boss": ["đại ca ha ha ha"], // Boss (2025)
-    "flow": ["lạc trôi", "straume"], // Flow (2024) -> Lạc trôi
-    "taxi driver": ["tài xế ẩn danh", "taxi driver"], // Fix phim bộ
+    // --- FIX V33 ---
+    "shadow": ["vô ảnh"],
+    "boss": ["đại ca ha ha ha"],
+    "flow": ["lạc trôi", "straume"],
+    "taxi driver": ["tài xế ẩn danh", "taxi driver"],
 
     // --- FIX CŨ ---
     "9": ["chiến binh số 9", "9"], 
@@ -134,7 +142,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
 
     if (serverClean.includes("harry potter colection") && originalName.toLowerCase().includes("harry potter")) return true;
 
-    // Year Check
     let yearMatch = false;
     if (!hasYear) yearMatch = true;
     else {
@@ -151,7 +158,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // Check Mapping
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
@@ -164,7 +170,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         }
     }
 
-    // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
         if (qClean.length <= 9) {
@@ -238,7 +243,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v33): "${originalName}" (${year}) | Type: ${type} ===`);
+    console.log(`\n=== Xử lý (v34): "${originalName}" (${year}) | Type: ${type} ===`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -259,25 +264,19 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
 
-    // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. VIETNAMESE PRIORITY FILTER (New in v33)
-    // Nếu có mapping tiếng Việt VÀ tìm thấy kết quả khớp mapping đó -> CHỈ GIỮ LẠI kết quả khớp mapping.
-    // Logic này giúp "Shadow" -> lấy "Vô ảnh", bỏ "Shadow". "Flow" -> lấy "Lạc trôi".
+    // Priority Check
     if (mappedVietnameseList.length > 0) {
         const strictVietnameseMatches = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
             return mappedVietnameseList.some(map => mClean.includes(normalizeForSearch(map)));
         });
-        
         if (strictVietnameseMatches.length > 0) {
-            console.log(`-> (v33) Priority: Tìm thấy tên tiếng Việt ưu tiên. Loại bỏ các kết quả tiếng Anh không khớp.`);
             matchedCandidates = strictVietnameseMatches;
         }
     }
 
-    // 3. Golden Match & Fallback Year (Standard Logic)
     if (matchedCandidates.length > 1 && !isHarryPotter) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
@@ -285,10 +284,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
             mClean = mClean.replace(year.toString(), "").trim();
             return mClean === oClean;
         });
-        // Chỉ dùng Golden Match nếu chưa bị filter bởi Priority ở trên
-        // (Nếu Priority đã chạy, danh sách đã chuẩn, không cần Golden Match đè lại)
         if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) {
-             // Logic phụ trợ
+             // Logic
         }
     }
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
@@ -296,7 +293,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // 4. Extended Isolation
     if (cleanName.length <= 9 && matchedCandidates.length > 0) {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
@@ -343,7 +339,13 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         name: "Phim4K VIP",
                         title: s.title || s.name,
                         url: s.url,
-                        behaviorHints: { notWebReady: false, bingeGroup: "phim4k-vip" }
+                        behaviorHints: { 
+                            notWebReady: false, 
+                            bingeGroup: "phim4k-vip",
+                            headers: {
+                                "User-Agent": "KSPlayer/1.0"
+                            }
+                        }
                     }));
                 }
             } else if (type === 'series') {
@@ -351,14 +353,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const metaRes = await axios.get(metaUrl, { headers: HEADERS });
                 if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) return [];
 
-                // Lọc danh sách Video từ Metadata
                 const matchedVideos = metaRes.data.meta.videos.filter(vid => {
                     const info = extractEpisodeInfo(vid.title || vid.name || "");
                     if (!info) return false;
-                    
-                    // FIX TAXI DRIVER:
-                    // Nếu tập phim là s:0 (chỉ có Ep01), nó chỉ được chấp nhận nếu User đang yêu cầu Season 1.
-                    // Nếu User yêu cầu Season 2, các tập s:0 sẽ bị loại bỏ.
                     if (info.s === 0) {
                         return season === 1 && info.e === episode;
                     }
@@ -375,10 +372,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
                             const streamTitle = s.title || s.name || "";
                             const streamInfo = extractEpisodeInfo(streamTitle);
                             
-                            // Check lần 2 trong Stream Title (để chắc chắn)
                             if (streamInfo) {
                                 if (streamInfo.s === 0) {
-                                     // Nếu stream title là s:0, chỉ lấy nếu đang tìm season 1
                                      if (season !== 1) return;
                                 } else {
                                      if (streamInfo.s !== season) return;
@@ -390,7 +385,13 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 name: `Phim4K S${season}E${episode}`,
                                 title: (s.title || vid.title) + `\n[${match.name}]`,
                                 url: s.url,
-                                behaviorHints: { notWebReady: false, bingeGroup: "phim4k-vip" }
+                                behaviorHints: { 
+                                    notWebReady: false, 
+                                    bingeGroup: "phim4k-vip",
+                                    headers: {
+                                        "User-Agent": "KSPlayer/1.0"
+                                    }
+                                }
                             });
                         });
                     }
@@ -420,3 +421,5 @@ async function getCinemetaMetadata(type, imdbId) {
 
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port: port });
+
+```
