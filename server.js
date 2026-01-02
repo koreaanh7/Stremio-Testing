@@ -16,32 +16,33 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v34",
-    version: "34.0.0",
-    name: "Phim4K VIP (UA Proxy Fix)",
-    description: "Based on v33, added ProxyHeaders for KSPlayer",
+    id: "com.phim4k.vip.final.v35",
+    version: "35.0.0",
+    name: "Phim4K VIP (Oppenheimer Strict)",
+    description: "Strict mapping for Oppenheimer (2023) to avoid docs",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MAPPING (GIỮ NGUYÊN TỪ V33) ===
+// === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX PRIORITY (V33) ---
+    // --- FIX PRIORITY (STRICT FILTER) ---
     "shadow": ["vô ảnh"], 
     "boss": ["đại ca ha ha ha"], 
-    "flow": ["lạc trôi", "straume"], 
-    "taxi driver": ["tài xế ẩn danh", "taxi driver"],
+    "flow": ["lạc trôi", "straume"],
+    // [CẬP NHẬT V35] Ép cứng Oppenheimer phải có năm 2023 để né phim tài liệu
+    "oppenheimer": ["oppenheimer 2023"], 
 
     // --- CÁC FIX KHÁC ---
+    "taxi driver": ["tài xế ẩn danh", "taxi driver"],
     "9": ["chiến binh số 9", "9"], 
     "the neverending story": ["câu chuyện bất tận"],
     "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"],
     "brother": ["brother", "lão đại", "người anh em"],
     "from": ["bẫy"], 
     "dexter: original sin": ["dexter original sin", "dexter trọng tội", "dexter sát thủ"],
-    "oppenheimer": ["oppenheimer"], 
     "12 monkeys": ["12 con khỉ", "twelve monkeys"],
     "it": ["gã hề ma quái"],
     "up": ["vút bay"],
@@ -238,7 +239,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v34): "${originalName}" (${year}) | Type: ${type} ===`);
+    console.log(`\n=== Xử lý (v35): "${originalName}" (${year}) | Type: ${type} ===`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -262,14 +263,15 @@ builder.defineStreamHandler(async ({ type, id }) => {
     // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. VIETNAMESE PRIORITY FILTER (Logic từ v33)
+    // 2. VIETNAMESE PRIORITY FILTER (Oppenheimer Filter activates here)
     if (mappedVietnameseList.length > 0) {
         const strictVietnameseMatches = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
             return mappedVietnameseList.some(map => mClean.includes(normalizeForSearch(map)));
         });
+        
         if (strictVietnameseMatches.length > 0) {
-            console.log(`-> (v34) Priority: Tìm thấy tên tiếng Việt ưu tiên. Loại bỏ các kết quả tiếng Anh không khớp.`);
+            console.log(`-> (v35) Priority: Tìm thấy kết quả khớp Mapping Ưu tiên. Loại bỏ các kết quả khác.`);
             matchedCandidates = strictVietnameseMatches;
         }
     }
@@ -283,7 +285,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return mClean === oClean;
         });
         if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) {
-            // Priority logic
+             // Priority logic keeps it safe
         }
     }
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
@@ -335,11 +337,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         });
                     }
                     
-                    // [MODIFIED FOR V34]
+                    // [MOVED FROM v34]
                     return streams.map(s => {
-                        // [THÊM] Log để debug
                         console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Movie: ${s.title || s.name}`);
-                        
                         return {
                             name: "Phim4K VIP", 
                             title: s.title || s.name,
@@ -361,7 +361,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const matchedVideos = metaRes.data.meta.videos.filter(vid => {
                     const info = extractEpisodeInfo(vid.title || vid.name || "");
                     if (!info) return false;
-                    // FIX TAXI DRIVER (Logic từ v33)
+                    // FIX TAXI DRIVER
                     if (info.s === 0) return season === 1 && info.e === episode;
                     return info.s === season && info.e === episode;
                 });
@@ -381,7 +381,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 if (streamInfo.e !== episode) return;
                             }
                             
-                            // [MODIFIED FOR V34]
+                            // [MOVED FROM v34]
                             console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Series: ${s.title}`);
 
                             episodeStreams.push({
@@ -391,7 +391,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 behaviorHints: { 
                                     notWebReady: false, 
                                     bingeGroup: "phim4k-vip",
-                                    // [THÊM MỚI] Dòng này ép User Agent:
                                     proxyHeaders: { request: { "User-Agent": "KSPlayer/1.0" } },
                                     headers: { "User-Agent": "KSPlayer/1.0" }
                                 }
