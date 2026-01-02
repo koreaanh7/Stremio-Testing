@@ -11,7 +11,6 @@ if (!TARGET_MANIFEST_URL) {
 const getBaseUrl = (url) => url.replace('/manifest.json', '');
 const TARGET_BASE_URL = getBaseUrl(TARGET_MANIFEST_URL);
 
-// Header dùng để gọi API tìm kiếm (giả lập trình duyệt)
 const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 };
@@ -19,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v34",
     version: "34.0.0",
-    name: "Phim4K VIP (UA Fix)",
-    description: "Added User-Agent KSPlayer/1.0 for Player",
+    name: "Phim4K VIP (UA Fake)",
+    description: "Added Fake User-Agent KSPlayer/1.0",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -29,13 +28,13 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX MỚI (V33) ---
+    // --- FIX PRIORITY (V33) ---
     "shadow": ["vô ảnh"], 
     "boss": ["đại ca ha ha ha"], 
-    "flow": ["lạc trôi", "straume"],
+    "flow": ["lạc trôi", "straume"], 
     "taxi driver": ["tài xế ẩn danh", "taxi driver"],
 
-    // --- FIX CŨ ---
+    // --- CÁC FIX KHÁC ---
     "9": ["chiến binh số 9", "9"], 
     "the neverending story": ["câu chuyện bất tận"],
     "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"],
@@ -135,6 +134,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
 
     if (serverClean.includes("harry potter colection") && originalName.toLowerCase().includes("harry potter")) return true;
 
+    // Year Check
     let yearMatch = false;
     if (!hasYear) yearMatch = true;
     else {
@@ -151,6 +151,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
+    // Check Mapping
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
@@ -163,6 +164,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         }
     }
 
+    // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
         if (qClean.length <= 9) {
@@ -260,18 +262,19 @@ builder.defineStreamHandler(async ({ type, id }) => {
     // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. VIETNAMESE PRIORITY
+    // 2. VIETNAMESE PRIORITY FILTER
     if (mappedVietnameseList.length > 0) {
         const strictVietnameseMatches = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
             return mappedVietnameseList.some(map => mClean.includes(normalizeForSearch(map)));
         });
         if (strictVietnameseMatches.length > 0) {
+            console.log(`-> (v34) Priority: Tìm thấy tên tiếng Việt ưu tiên. Loại bỏ các kết quả tiếng Anh không khớp.`);
             matchedCandidates = strictVietnameseMatches;
         }
     }
 
-    // 3. Golden Match
+    // 3. Golden Match & Fallback Year
     if (matchedCandidates.length > 1 && !isHarryPotter) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
@@ -280,7 +283,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return mClean === oClean;
         });
         if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) {
-             // Logic
+            // (Giữ logic cũ)
         }
     }
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter) {
@@ -338,10 +341,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         behaviorHints: { 
                             notWebReady: false, 
                             bingeGroup: "phim4k-vip",
-                            // --- ADDED FAKE UA HERE ---
-                            headers: {
-                                "User-Agent": "KSPlayer/1.0"
-                            }
+                            // === FAKE USER AGENT (MOVIE) ===
+                            headers: { "User-Agent": "KSPlayer/1.0" }
                         }
                     }));
                 }
@@ -353,9 +354,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const matchedVideos = metaRes.data.meta.videos.filter(vid => {
                     const info = extractEpisodeInfo(vid.title || vid.name || "");
                     if (!info) return false;
-                    if (info.s === 0) {
-                        return season === 1 && info.e === episode;
-                    }
+                    // FIX TAXI DRIVER
+                    if (info.s === 0) return season === 1 && info.e === episode;
                     return info.s === season && info.e === episode;
                 });
 
@@ -368,13 +368,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
                             const streamInfo = extractEpisodeInfo(streamTitle);
-                            
                             if (streamInfo) {
-                                if (streamInfo.s === 0) {
-                                     if (season !== 1) return;
-                                } else {
-                                     if (streamInfo.s !== season) return;
-                                }
+                                if (streamInfo.s === 0) { if (season !== 1) return; } 
+                                else { if (streamInfo.s !== season) return; }
                                 if (streamInfo.e !== episode) return;
                             }
                             
@@ -385,10 +381,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 behaviorHints: { 
                                     notWebReady: false, 
                                     bingeGroup: "phim4k-vip",
-                                    // --- ADDED FAKE UA HERE ---
-                                    headers: {
-                                        "User-Agent": "KSPlayer/1.0"
-                                    }
+                                    // === FAKE USER AGENT (SERIES) ===
+                                    headers: { "User-Agent": "KSPlayer/1.0" }
                                 }
                             });
                         });
