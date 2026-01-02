@@ -1,10 +1,3 @@
-Chào bạn, việc fake `User-Agent` cho Player là một kỹ thuật rất hay để vượt qua một số cơ chế chặn của server cung cấp link (hoặc để tối ưu luồng stream). Trong Stremio, ta thực hiện việc này bằng cách thêm thuộc tính `headers` vào trong object `behaviorHints` của kết quả trả về.
-
-Đây là **Phiên bản v34**, mình đã thêm header `User-Agent: KSPlayer/1.0` vào cả phần Movie và Series.
-
-### CẬP NHẬT `server.js` (Phiên bản v34 - Final Stable)
-
-```javascript
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require("axios");
 
@@ -18,7 +11,7 @@ if (!TARGET_MANIFEST_URL) {
 const getBaseUrl = (url) => url.replace('/manifest.json', '');
 const TARGET_BASE_URL = getBaseUrl(TARGET_MANIFEST_URL);
 
-// Headers dùng để gọi API tìm kiếm (Backend)
+// Header dùng để gọi API tìm kiếm (giả lập trình duyệt)
 const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 };
@@ -27,7 +20,7 @@ const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v34",
     version: "34.0.0",
     name: "Phim4K VIP (UA Fix)",
-    description: "Added User-Agent: KSPlayer/1.0 for Player",
+    description: "Added User-Agent KSPlayer/1.0 for Player",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -36,9 +29,9 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX V33 ---
-    "shadow": ["vô ảnh"],
-    "boss": ["đại ca ha ha ha"],
+    // --- FIX MỚI (V33) ---
+    "shadow": ["vô ảnh"], 
+    "boss": ["đại ca ha ha ha"], 
     "flow": ["lạc trôi", "straume"],
     "taxi driver": ["tài xế ẩn danh", "taxi driver"],
 
@@ -264,9 +257,10 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
 
+    // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // Priority Check
+    // 2. VIETNAMESE PRIORITY
     if (mappedVietnameseList.length > 0) {
         const strictVietnameseMatches = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
@@ -277,6 +271,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
     }
 
+    // 3. Golden Match
     if (matchedCandidates.length > 1 && !isHarryPotter) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
@@ -293,6 +288,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
+    // 4. Extended Isolation
     if (cleanName.length <= 9 && matchedCandidates.length > 0) {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
@@ -342,6 +338,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         behaviorHints: { 
                             notWebReady: false, 
                             bingeGroup: "phim4k-vip",
+                            // --- ADDED FAKE UA HERE ---
                             headers: {
                                 "User-Agent": "KSPlayer/1.0"
                             }
@@ -388,6 +385,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 behaviorHints: { 
                                     notWebReady: false, 
                                     bingeGroup: "phim4k-vip",
+                                    // --- ADDED FAKE UA HERE ---
                                     headers: {
                                         "User-Agent": "KSPlayer/1.0"
                                     }
@@ -421,5 +419,3 @@ async function getCinemetaMetadata(type, imdbId) {
 
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port: port });
-
-```
