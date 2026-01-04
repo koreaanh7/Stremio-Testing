@@ -1,24 +1,3 @@
-Chào bạn, yêu cầu này rất hợp lý để tối ưu hóa tốc độ và độ chính xác cho các bộ Anime/Cartoon có cách đặt tên file "dị" như *Attack on Titan* và *Regular Show*.
-
-Đây là **Phiên bản v37**.
-
-### Các thay đổi chính trong v37:
-
-1. **Attack on Titan (AoT) Mode:**
-* **Xử lý Season 1:** Tự động cắt bỏ phần `(số)` ở cuối tên. Ví dụ: `"That day: The Fall of Shiganshina (2)"` -> `"That day The Fall of Shiganshina"`.
-* **Mapping đặc biệt:** Tự động đổi `"The Other Side of The Sea"` thành `"The Other Side of The Ocean"` trước khi quét.
-* **Tối ưu cực đại:** Khi đã quét thấy **1 file** khớp với tên tập phim, hệ thống sẽ **DỪNG NGAY LẬP TỨC** việc quét các file còn lại. Điều này giúp tốc độ load AoT nhanh gấp 10 lần (vì AoT thường re-up rất nhiều file trùng).
-* **Làm sạch tên:** Tự động loại bỏ dấu `:`, `,` v.v.
-
-
-2. **Regular Show Mode:** Áp dụng công nghệ quét thông minh (Smart Regex) giống Tom & Jerry.
-3. **Tom & Jerry:** Giữ nguyên độ ổn định của v36.
-
----
-
-### CẬP NHẬT `server.js` (Phiên bản v37 - AoT & Regular Show Special)
-
-```javascript
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require("axios");
 
@@ -509,5 +488,3 @@ async function getCinemetaMetadata(type, imdbId) {
 
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port: port });
-
-```
