@@ -18,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v35",
     version: "35.0.0",
-    name: "Phim4K VIP (Regex & Strict)",
-    description: "Fix Oppenheimer strict & Tom and Jerry Regex search",
+    name: "Phim4K VIP (Regex Title Match)",
+    description: "Added strict Oppenheimer & Regex matching for Tom and Jerry",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,17 +28,15 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX V35 (STRICT & REGEX) ---
-    "oppenheimer": ["oppenheimer"], // Sẽ kích hoạt logic check năm nghiêm ngặt
-    "tom and jerry": ["tom and jerry the golden era anthology"], // Map vào collection tổng
+    // --- FIX MỚI (V35) ---
+    "oppenheimer": ["oppenheimer"], // Map cứng để kích hoạt Priority & Golden Match
+    "tom and jerry": ["tom and jerry the golden era anthology"], // Map sang collection tổng
 
-    // --- FIX PRIORITY (V33/34) ---
+    // --- FIX CŨ ---
     "shadow": ["vô ảnh"], 
     "boss": ["đại ca ha ha ha"], 
     "flow": ["lạc trôi", "straume"], 
     "taxi driver": ["tài xế ẩn danh", "taxi driver"],
-
-    // --- CÁC FIX KHÁC ---
     "9": ["chiến binh số 9", "9"], 
     "the neverending story": ["câu chuyện bất tận"],
     "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"],
@@ -121,7 +119,7 @@ function normalizeForSearch(title) {
 
 function extractEpisodeInfo(filename) {
     const name = filename.toLowerCase();
-    const matchSE = name.match(/(?:s|season)[\s\.]?(\d{1,2})[\s\xe.-]*(?:e|ep|episode|tap)[\s\.]?(\d{1,3})/);
+    const matchSE = name.match(/(?:s|season)[\s\.]?(\d{1,4})[\s\xe.-]*(?:e|ep|episode|tap)[\s\.]?(\d{1,3})/);
     if (matchSE) return { s: parseInt(matchSE[1]), e: parseInt(matchSE[2]) };
     const matchX = name.match(/(\d{1,2})x(\d{1,3})/);
     if (matchX) return { s: parseInt(matchX[1]), e: parseInt(matchX[2]) };
@@ -130,19 +128,14 @@ function extractEpisodeInfo(filename) {
     return null;
 }
 
-// Hàm tạo Regex quét tên tập phim (Tom and Jerry)
+// === HÀM TẠO REGEX CHO TITLE (V35) ===
 function createTitleRegex(title) {
     if (!title) return null;
-    // Tách các từ, loại bỏ ký tự đặc biệt, nối lại bằng [\W_.]+ (khớp mọi ký tự không phải chữ/số hoặc dấu chấm/gạch)
-    const cleanWords = title.toLowerCase()
-        .replace(/['":\-.()\[\]?,!]/g, "") // Bỏ dấu câu trong tên gốc
-        .split(/\s+/)
-        .filter(w => w.length > 0);
-    
-    if (cleanWords.length === 0) return null;
-    
-    // Pattern: word1[\W_.]+word2[\W_.]+word3
-    const pattern = cleanWords.join("[\\W_.]+");
+    // 1. Chuyển về lowercase
+    // 2. Escape các ký tự đặc biệt của regex
+    const clean = title.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // 3. Thay thế khoảng trắng bằng pattern [\W_.]+ (khớp dấu chấm, gạch dưới, khoảng trắng...)
+    const pattern = clean.replace(/\s+/g, '[\\W_.]+');
     return new RegExp(pattern, 'i');
 }
 
@@ -152,16 +145,11 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     const serverClean = normalizeForSearch(serverName);
 
     if (serverClean.includes("harry potter colection") && originalName.toLowerCase().includes("harry potter")) return true;
+    
+    // Tom and Jerry Exception
+    if (originalName.toLowerCase().includes("tom and jerry") && serverClean.includes("golden era anthology")) return true;
 
-    // --- LOGIC ĐẶC BIỆT CHO OPPENHEIMER (V35) ---
-    // Nếu phim là Oppenheimer, BẮT BUỘC server phải có năm 2023.
-    // Loại bỏ các phim tài liệu (thường ko có năm hoặc sai năm)
-    if (normalizeForSearch(originalName) === "oppenheimer") {
-        const has2023 = serverName.includes("2023") || (candidate.releaseInfo && candidate.releaseInfo.includes("2023"));
-        if (!has2023) return false; 
-    }
-
-    // Year Check Thường
+    // Year Check
     let yearMatch = false;
     if (!hasYear) yearMatch = true;
     else {
@@ -176,9 +164,8 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         } else yearMatch = true;
     }
     if (serverClean.includes("harry potter colection")) yearMatch = true;
-    // Tom and Jerry: Bỏ qua check năm vì tên file loạn xạ (1940, 1941...)
-    if (originalName.toLowerCase().includes("tom and jerry")) yearMatch = true;
-
+    if (originalName.toLowerCase().includes("tom and jerry")) yearMatch = true; // Bỏ qua năm cho Tom and Jerry
+    
     if (!yearMatch) return false;
 
     // Check Mapping
@@ -288,7 +275,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     );
 
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
-    // --- CHECK TOM AND JERRY ---
+    // [V35] Cờ kiểm tra Tom and Jerry
     const isTomAndJerry = originalName.toLowerCase().includes("tom and jerry");
 
     // 1. Subtitle Check
@@ -301,7 +288,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return mappedVietnameseList.some(map => mClean.includes(normalizeForSearch(map)));
         });
         if (strictVietnameseMatches.length > 0) {
-            console.log(`-> (v35) Priority: Filter theo mapping ưu tiên (Shadow, Flow, Oppenheimer, T&J...).`);
+            console.log(`-> (v35) Priority: Tìm thấy tên tiếng Việt ưu tiên. Loại bỏ các kết quả khác.`);
             matchedCandidates = strictVietnameseMatches;
         }
     }
@@ -315,7 +302,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return mClean === oClean;
         });
         if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) {
-            // (Pass)
+             // Priority logic
         }
     }
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter && !isTomAndJerry) {
@@ -348,6 +335,19 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     let allStreams = [];
     const hpKeywords = getHPKeywords(originalName);
+
+    // [V35] Lấy tên tập phim cụ thể nếu là Series
+    let targetEpisodeTitle = "";
+    if (type === 'series' && meta.videos) {
+        // Tìm video object dựa trên season/episode user yêu cầu
+        const currentVideo = meta.videos.find(v => v.season === season && v.episode === episode);
+        if (currentVideo) {
+            targetEpisodeTitle = currentVideo.title || currentVideo.name || "";
+            if (isTomAndJerry) {
+                console.log(`[TomAndJerry] Đang tìm tập: "${targetEpisodeTitle}" (bỏ qua SS/EP check)`);
+            }
+        }
+    }
 
     const streamPromises = matchedCandidates.map(async (match) => {
         const fullId = match.id;
@@ -387,84 +387,59 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const metaRes = await axios.get(metaUrl, { headers: HEADERS });
                 if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) return [];
 
-                // --- LOGIC TOM AND JERRY (V35) ---
-                let targetEpisodeTitleRegex = null;
+                // Lọc video list
+                let matchedVideos = [];
                 if (isTomAndJerry) {
-                    // 1. Tìm tập phim user đang request trong Metadata của Cinemeta
-                    const targetVideo = metaRes.data.meta.videos.find(v => {
-                        // Logic tìm video ID khớp với ID request (ví dụ: tt0033169:1940:1)
-                        // Tuy nhiên meta.videos thường có format ID giống request
-                        return v.id === id || (v.season === season && v.episode === episode);
+                    // Với Tom and Jerry: Lấy TOÀN BỘ video list của collection để quét
+                    matchedVideos = metaRes.data.meta.videos;
+                } else {
+                    // Phim bộ thường: Lọc theo Season/Episode
+                    matchedVideos = metaRes.data.meta.videos.filter(vid => {
+                        const info = extractEpisodeInfo(vid.title || vid.name || "");
+                        if (!info) return false;
+                        if (info.s === 0) return season === 1 && info.e === episode;
+                        return info.s === season && info.e === episode;
                     });
-
-                    if (targetVideo && (targetVideo.title || targetVideo.name)) {
-                        const epTitle = targetVideo.title || targetVideo.name;
-                        targetEpisodeTitleRegex = createTitleRegex(epTitle);
-                        console.log(`[DEBUG T&J] Tìm pattern cho tập: "${epTitle}" -> Regex: ${targetEpisodeTitleRegex}`);
-                    }
                 }
-                // ---------------------------------
-
-                const matchedVideos = metaRes.data.meta.videos.filter(vid => {
-                    const info = extractEpisodeInfo(vid.title || vid.name || "");
-                    if (!info) return false;
-                    // FIX TAXI DRIVER
-                    if (info.s === 0) return season === 1 && info.e === episode;
-                    return info.s === season && info.e === episode;
-                });
 
                 let episodeStreams = [];
-                // Nếu là Tom&Jerry, ta phải quét stream của chính Match này (Collection), chứ ko phải loop qua matchedVideos (thường ko khớp)
-                // Tuy nhiên cấu trúc code hiện tại loop qua matchedVideos để lấy ID video con.
-                // Với trường hợp collection lộn xộn, ta cần lấy stream của chính cái Series ID (match.id) nếu server hỗ trợ, 
-                // hoặc lấy stream của tập đầu tiên tìm thấy để quét list?
-                // Cách tốt nhất với Phim4K series: Thường họ trả về list tập trong stream của ID gốc hoặc các ID con.
-                
-                // VỚI TOM AND JERRY: Ta sẽ lấy danh sách stream của chính episode match (theo server)
-                // Nhưng vì server lệch tập, ta sẽ thử lấy streams của tập 1 (hoặc bất kỳ tập nào) rồi lọc?
-                // KHÔNG, Phim4K cấu trúc series là mỗi tập 1 ID.
-                // Nếu map vào Collection, match.id là ID của collection.
-                // Ta cần lấy danh sách episodes từ match.id (Metadata của Phim4K).
-                
-                // SỬA LOGIC LOOP:
-                // Ta sẽ dùng danh sách videos từ Phim4K (đã lấy ở metaRes bên trên)
-                // Loop qua videos của Phim4K, tìm file khớp Regex hoặc khớp S/E.
+                // [V35] Tạo Regex check cho tập hiện tại
+                const titleRegex = isTomAndJerry ? createTitleRegex(targetEpisodeTitle) : null;
 
-                const serverVideos = metaRes.data.meta.videos; // Videos từ Phim4K
+                for (const vid of matchedVideos) {
+                    const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(vid.id)}.json`;
+                    const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
+                    
+                    if (sRes.data && sRes.data.streams) {
+                        sRes.data.streams.forEach(s => {
+                            const streamTitle = s.title || s.name || "";
+                            
+                            // === LOGIC LỌC TẬP (V35) ===
+                            let isMatch = false;
 
-                for (const sv of serverVideos) {
-                    // Logic lọc video của Server
-                    let isTargetVideo = false;
-
-                    if (isTomAndJerry && targetEpisodeTitleRegex) {
-                        // Nếu là Tom & Jerry, kiểm tra tên tập (Title của Server Video) có khớp Regex không
-                        const svTitle = sv.title || sv.name || "";
-                        if (targetEpisodeTitleRegex.test(svTitle)) {
-                            isTargetVideo = true;
-                            console.log(`[DEBUG T&J] MATCHED FILE: ${svTitle}`);
-                        }
-                    } else {
-                        // Logic cũ (Taxi Driver, phim thường)
-                        const info = extractEpisodeInfo(sv.title || sv.name || "");
-                        if (info) {
-                            if (info.s === 0) {
-                                if (season === 1 && info.e === episode) isTargetVideo = true;
+                            if (isTomAndJerry && titleRegex) {
+                                // Logic đặc biệt cho Tom and Jerry: Check Regex Title
+                                if (titleRegex.test(streamTitle)) {
+                                    isMatch = true;
+                                    console.log(`[TomAndJerry] MATCHED: ${streamTitle}`);
+                                }
                             } else {
-                                if (info.s === season && info.e === episode) isTargetVideo = true;
+                                // Logic thường: Check Season/Episode
+                                const streamInfo = extractEpisodeInfo(streamTitle);
+                                if (streamInfo) {
+                                    if (streamInfo.s === 0) {
+                                        if (season === 1 && streamInfo.e === episode) isMatch = true;
+                                    } else {
+                                        if (streamInfo.s === season && streamInfo.e === episode) isMatch = true;
+                                    }
+                                }
                             }
-                        }
-                    }
 
-                    if (isTargetVideo) {
-                        const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(sv.id)}.json`;
-                        const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
-                        
-                        if (sRes.data && sRes.data.streams) {
-                            sRes.data.streams.forEach(s => {
+                            if (isMatch) {
                                 console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Series: ${s.title}`);
                                 episodeStreams.push({
-                                    name: isTomAndJerry ? "Phim4K VIP (T&J)" : `Phim4K S${season}E${episode}`,
-                                    title: (s.title || sv.title) + `\n[${match.name}]`,
+                                    name: `Phim4K S${season}E${episode}`,
+                                    title: (s.title || vid.title) + `\n[${match.name}]`,
                                     url: s.url,
                                     behaviorHints: { 
                                         notWebReady: false, 
@@ -473,8 +448,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                         headers: { "User-Agent": "KSPlayer/1.0" }
                                     }
                                 });
-                            });
-                        }
+                            }
+                        });
                     }
                 }
                 return episodeStreams;
