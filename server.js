@@ -18,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v35",
     version: "35.0.0",
-    name: "Phim4K VIP (Legends Fix)",
-    description: "Strict Oppenheimer & Tom and Jerry Regex Matching",
+    name: "Phim4K VIP (T&J Algo)",
+    description: "Added Tom & Jerry Title Scanning & Strict Oppenheimer",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,14 +28,14 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX MỚI (V35) ---
-    "tom and jerry": ["tom and jerry the golden era anthology"], // Map vào collection tổng
-    "oppenheimer": ["oppenheimer"], // Map cứng (sẽ được xử lý bởi Strict Filter bên dưới)
-
-    // --- FIX CŨ ---
+    // --- SPECIAL REQUESTS (V33/V35) ---
     "shadow": ["vô ảnh"], 
     "boss": ["đại ca ha ha ha"], 
     "flow": ["lạc trôi", "straume"], 
+    "oppenheimer": ["oppenheimer"], // Giữ nguyên, sẽ xử lý strict ở logic code
+    "tom and jerry": ["tom and jerry the golden era", "tom and jerry anthology", "tom and jerry"],
+
+    // --- FIX CŨ ---
     "taxi driver": ["tài xế ẩn danh", "taxi driver"],
     "9": ["chiến binh số 9", "9"], 
     "the neverending story": ["câu chuyện bất tận"],
@@ -96,17 +96,6 @@ const VIETNAMESE_MAPPING = {
 };
 
 // --- UTILS ---
-// Tạo Regex linh hoạt từ tên tập phim (Cho Tom & Jerry)
-function createFlexibleRegex(title) {
-    // Xóa ký tự lạ, chỉ giữ chữ và số
-    const clean = title.replace(/[^\w\s]/g, '').trim(); 
-    // Tách thành các từ
-    const parts = clean.split(/\s+/);
-    // Ghép lại bằng regex bắt ký tự ngăn cách (dấu chấm, gạch dưới, khoảng trắng...)
-    // VD: Puss Gets The Boot -> Puss[\W_.]+Gets[\W_.]+The[\W_.]+Boot
-    return new RegExp(parts.join("[\\W_.]+"), 'i');
-}
-
 function getHPKeywords(originalName) {
     const name = originalName.toLowerCase();
     if (name.includes("sorcerer") || name.includes("philosopher")) return ["philosopher", "sorcerer", "hòn đá", " 1 "];
@@ -128,6 +117,17 @@ function normalizeForSearch(title) {
         .trim();
 }
 
+// Hàm chuẩn hóa đặc biệt cho Tom & Jerry (Biến "Puss Gets The Boot" -> "puss.gets.the.boot")
+function normalizeToDots(title) {
+    if (!title) return "";
+    return title.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, "") // Bỏ dấu tiếng Việt
+        .replace(/['":,?!]/g, "") // Bỏ ký tự đặc biệt
+        .trim()
+        .split(/\s+/) // Tách dấu cách
+        .join("."); // Nối bằng dấu chấm
+}
+
 function extractEpisodeInfo(filename) {
     const name = filename.toLowerCase();
     const matchSE = name.match(/(?:s|season)[\s\.]?(\d{1,4})[\s\xe.-]*(?:e|ep|episode|tap)[\s\.]?(\d{1,3})/);
@@ -145,8 +145,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     const serverClean = normalizeForSearch(serverName);
 
     if (serverClean.includes("harry potter colection") && originalName.toLowerCase().includes("harry potter")) return true;
-    // Tom and Jerry Override
-    if (originalName.toLowerCase().includes("tom and jerry") && serverClean.includes("tom and jerry")) return true;
 
     // Year Check
     let yearMatch = false;
@@ -162,11 +160,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
                      || candidate.releaseInfo.includes((year+1).toString());
         } else yearMatch = true;
     }
-    
-    // Override year check for T&J Collection (because year varies)
-    if (serverClean.includes("tom and jerry")) yearMatch = true;
     if (serverClean.includes("harry potter colection")) yearMatch = true;
-    
     if (!yearMatch) return false;
 
     // Check Mapping
@@ -276,7 +270,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     );
 
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
-    const isTomAndJerry = originalName.toLowerCase().includes("tom and jerry");
+    const isOppenheimer = cleanName === "oppenheimer";
 
     // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
@@ -288,29 +282,28 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return mappedVietnameseList.some(map => mClean.includes(normalizeForSearch(map)));
         });
         if (strictVietnameseMatches.length > 0) {
-            // [FIX OPPENHEIMER STRICT]
-            // Nếu phim là Oppenheimer (đã map là "oppenheimer"), và kết quả tìm được là "oppenheimer",
-            // Priority Filter sẽ giữ nó lại.
-            // Nhưng nếu "To End All War..." cũng chứa "oppenheimer", nó cũng được giữ.
-            // Cần thêm bước lọc độ dài trong Priority này.
-            if (originalName.toLowerCase() === 'oppenheimer') {
-                 // Chỉ giữ những phim có độ dài tên (sau khi clean) xấp xỉ tên gốc
-                 const strictLenMatches = strictVietnameseMatches.filter(m => {
-                     const mClean = normalizeForSearch(m.name).replace(/\d{4}/, "").trim();
-                     const oClean = normalizeForSearch(originalName);
-                     return mClean.length <= oClean.length + 5; // Cho phép chênh lệch tối đa 5 ký tự
-                 });
-                 if (strictLenMatches.length > 0) matchedCandidates = strictLenMatches;
-                 else matchedCandidates = strictVietnameseMatches; // Fallback
-            } else {
-                matchedCandidates = strictVietnameseMatches;
-            }
-            console.log(`-> (v35) Priority Filter Applied.`);
+            console.log(`-> (v35) Priority: Tìm thấy tên tiếng Việt ưu tiên.`);
+            matchedCandidates = strictVietnameseMatches;
         }
     }
 
-    // 3. Golden Match & Fallback Year
-    if (matchedCandidates.length > 1 && !isHarryPotter && !isTomAndJerry) {
+    // === 3. SPECIAL STRICT FILTERS (OPPENHEIMER) ===
+    if (isOppenheimer && matchedCandidates.length > 0) {
+        console.log("-> Kích hoạt chế độ nghiêm ngặt cho Oppenheimer");
+        matchedCandidates = matchedCandidates.filter(m => {
+            const mClean = normalizeForSearch(m.name);
+            // Chỉ lấy phim tên chính xác "oppenheimer" hoặc "oppenheimer 2023"
+            // Loại bỏ mọi thứ có dấu ":" hoặc từ thừa (phim tài liệu)
+            if (mClean.includes("real story") || mClean.includes("end all war") || mClean.includes("to end all")) return false;
+            
+            // Check chính xác: tên server phải kết thúc bằng "oppenheimer" hoặc bắt đầu bằng nó, không có subtitle
+            const simpleName = mClean.replace(/\d{4}/g, "").trim();
+            return simpleName === "oppenheimer";
+        });
+    }
+
+    // 4. Golden Match & Fallback Year
+    if (matchedCandidates.length > 1 && !isHarryPotter && !isOppenheimer) { // Skip nếu là Oppenheimer đã lọc ở trên
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
             let mClean = normalizeForSearch(m.name);
@@ -318,15 +311,15 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return mClean === oClean;
         });
         if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) {
-            // Priority
+             // Logic phụ trợ
         }
     }
-    if (hasYear && matchedCandidates.length > 1 && !isHarryPotter && !isTomAndJerry) {
+    if (hasYear && matchedCandidates.length > 1 && !isHarryPotter && !isOppenheimer) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
-    // 4. Extended Isolation
+    // 5. Extended Isolation
     if (cleanName.length <= 9 && matchedCandidates.length > 0) {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
@@ -351,6 +344,21 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     let allStreams = [];
     const hpKeywords = getHPKeywords(originalName);
+    
+    // === TOM AND JERRY DETECT ===
+    const isTomJerry = cleanName.includes("tom and jerry");
+    let targetEpisodeTitle = null;
+    let targetDotTitle = null;
+
+    if (isTomJerry && meta && meta.videos) {
+        // Tìm tập hiện tại trong Cinemeta
+        const currentVid = meta.videos.find(v => v.id === id);
+        if (currentVid && (currentVid.title || currentVid.name)) {
+            targetEpisodeTitle = currentVid.title || currentVid.name;
+            targetDotTitle = normalizeToDots(targetEpisodeTitle); // "puss.gets.the.boot"
+            console.log(`-> (v35) Tom&Jerry Mode: Đang tìm file chứa chuỗi: "${targetDotTitle}"`);
+        }
+    }
 
     const streamPromises = matchedCandidates.map(async (match) => {
         const fullId = match.id;
@@ -371,7 +379,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     }
                     
                     return streams.map(s => {
-                        console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Movie: ${s.title || s.name}`);
+                        console.log(`[DEBUG UA] Movie: ${s.title || s.name}`);
                         return {
                             name: "Phim4K VIP", 
                             title: s.title || s.name,
@@ -390,85 +398,60 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const metaRes = await axios.get(metaUrl, { headers: HEADERS });
                 if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) return [];
 
-                // Lấy thông tin video hiện tại từ Cinemeta
-                const currentVideo = metaRes.data.meta.videos.find(v => v.id === id);
-                // Nếu là Tom & Jerry, lấy tên tập (VD: Puss Gets the Boot)
-                const currentEpisodeTitle = currentVideo ? (currentVideo.title || currentVideo.name) : "";
-                
+                // Lọc video từ Server
                 const matchedVideos = metaRes.data.meta.videos.filter(vid => {
-                    const info = extractEpisodeInfo(vid.title || vid.name || "");
-                    if (!info) return false;
+                    const vidTitle = vid.title || vid.name || "";
                     
-                    // Tom & Jerry Skip Season Check
-                    if (isTomAndJerry) return true; // Lấy tất cả, sẽ lọc bằng Regex sau
+                    // === LOGIC TOM AND JERRY ===
+                    if (isTomJerry && targetDotTitle) {
+                        const svTitleDot = normalizeToDots(vidTitle); // Tên file trên server chuẩn hóa
+                        // So sánh chuỗi chấm (VD: server có "tom.and.jerry.puss.gets.the.boot" chứa "puss.gets.the.boot")
+                        if (svTitleDot.includes(targetDotTitle)) {
+                            return true;
+                        }
+                        return false; // Không khớp title thì bỏ qua, không xét Season/Ep
+                    }
 
+                    // === LOGIC THƯỜNG (TAXI DRIVER, v.v) ===
+                    const info = extractEpisodeInfo(vidTitle);
+                    if (!info) return false;
                     if (info.s === 0) return season === 1 && info.e === episode;
                     return info.s === season && info.e === episode;
                 });
 
                 let episodeStreams = [];
-                // Nếu là Tom & Jerry, chỉ cần query 1 lần vào Stream của ID phim (vì nó là Collection)
-                // Thay vì query từng video
-                if (isTomAndJerry && matchedVideos.length > 0) {
-                     // Tạo Regex từ tên tập phim
-                     const tjRegex = createFlexibleRegex(currentEpisodeTitle);
-                     console.log(`-> Tom & Jerry Regex: ${tjRegex}`);
-                     
-                     // Lấy stream từ ID Series chính (hoặc ID của tập đầu tiên tìm thấy để lấy list)
-                     // Vì Phim4K gom collection, thường stream nằm ở ID của phim
-                     const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(fullId)}.json`;
-                     const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
-                     
-                     if (sRes.data && sRes.data.streams) {
-                         sRes.data.streams.forEach(s => {
-                             const streamTitle = s.title || s.name || "";
-                             // Quét Regex tên tập
-                             if (tjRegex.test(streamTitle)) {
-                                 console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for T&J: ${streamTitle}`);
-                                 episodeStreams.push({
-                                    name: `Phim4K T&J`,
-                                    title: streamTitle + `\n[${match.name}]`,
-                                    url: s.url,
-                                    behaviorHints: { 
-                                        notWebReady: false, 
-                                        bingeGroup: "phim4k-vip",
-                                        proxyHeaders: { request: { "User-Agent": "KSPlayer/1.0" } },
-                                        headers: { "User-Agent": "KSPlayer/1.0" }
-                                    }
-                                });
-                             }
-                         });
-                     }
-                } else {
-                    // Logic Series Thông Thường
-                    for (const vid of matchedVideos) {
-                        const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(vid.id)}.json`;
-                        const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
-                        
-                        if (sRes.data && sRes.data.streams) {
-                            sRes.data.streams.forEach(s => {
-                                const streamTitle = s.title || s.name || "";
+                for (const vid of matchedVideos) {
+                    const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(vid.id)}.json`;
+                    const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
+                    
+                    if (sRes.data && sRes.data.streams) {
+                        sRes.data.streams.forEach(s => {
+                            const streamTitle = s.title || s.name || "";
+                            
+                            // Check lần 2 trong Stream Title
+                            // Nếu là T&J thì bỏ qua check S/E, tin tưởng vào bước lọc video ở trên
+                            if (!isTomJerry) {
                                 const streamInfo = extractEpisodeInfo(streamTitle);
                                 if (streamInfo) {
                                     if (streamInfo.s === 0) { if (season !== 1) return; } 
                                     else { if (streamInfo.s !== season) return; }
                                     if (streamInfo.e !== episode) return;
                                 }
-                                
-                                console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Series: ${s.title}`);
-                                episodeStreams.push({
-                                    name: `Phim4K S${season}E${episode}`,
-                                    title: (s.title || vid.title) + `\n[${match.name}]`,
-                                    url: s.url,
-                                    behaviorHints: { 
-                                        notWebReady: false, 
-                                        bingeGroup: "phim4k-vip",
-                                        proxyHeaders: { request: { "User-Agent": "KSPlayer/1.0" } },
-                                        headers: { "User-Agent": "KSPlayer/1.0" }
-                                    }
-                                });
+                            }
+
+                            console.log(`[DEBUG UA] Series: ${s.title}`);
+                            episodeStreams.push({
+                                name: `Phim4K S${season}E${episode}`,
+                                title: (s.title || vid.title) + `\n[${match.name}]`,
+                                url: s.url,
+                                behaviorHints: { 
+                                    notWebReady: false, 
+                                    bingeGroup: "phim4k-vip",
+                                    proxyHeaders: { request: { "User-Agent": "KSPlayer/1.0" } },
+                                    headers: { "User-Agent": "KSPlayer/1.0" }
+                                }
                             });
-                        }
+                        });
                     }
                 }
                 return episodeStreams;
