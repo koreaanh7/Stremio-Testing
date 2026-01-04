@@ -16,10 +16,10 @@ const HEADERS = {
 };
 
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v36",
-    version: "36.0.0",
-    name: "Phim4K VIP (T&J Fast Scan)",
-    description: "Fixed slow loading & special characters for Tom & Jerry",
+    id: "com.phim4k.vip.final.v37",
+    version: "37.0.0",
+    name: "Phim4K VIP (AoT & T&J Smart)",
+    description: "Intelligent Regex Matching for Tom & Jerry AND Attack on Titan",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,10 +28,12 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- TOM AND JERRY ---
+    // --- SPECIAL CASES (Scan by Title) ---
     "tom and jerry": ["tom and jerry the golden era anthology", "tom and jerry 1990"],
+    "attack on titan": ["shingeki no kyojin", "dai chien titan", "attack on titan"],
+    "shingeki no kyojin": ["attack on titan", "dai chien titan"],
 
-    // --- FIX PRIORITY (v33) ---
+    // --- FIX PRIORITY ---
     "shadow": ["vô ảnh"], 
     "boss": ["đại ca ha ha ha"], 
     "flow": ["lạc trôi", "straume"], 
@@ -130,22 +132,19 @@ function extractEpisodeInfo(filename) {
     return null;
 }
 
-// === (v36) SMART REGEX BUILDER ===
-// Loại bỏ hoàn toàn dấu ' ! ? . , trước khi tạo Regex
-// Ví dụ: "That's my pup!" -> "Thats my pup" -> /Thats[\W_]+my[\W_]+pup/i
+// === SMART REGEX BUILDER (Dùng chung cho T&J và AoT) ===
 function createSmartRegex(episodeName) {
     if (!episodeName) return null;
     
-    // 1. Xóa ký tự đặc biệt gây nhiễu (' ! ? . ,)
-    // Giữ lại chữ cái, số và khoảng trắng
+    // 1. Xóa ký tự đặc biệt (' ! ? . ,)
     let cleanName = episodeName.replace(/['"!?,.]/g, ""); 
     cleanName = cleanName.trim();
     if (cleanName.length === 0) return null;
     
-    // 2. Tách từ
+    // 2. Tách từ và Escape regex
     const words = cleanName.split(/\s+/).map(w => w.replace(/[.*+^${}()|[\]\\]/g, '\\$&'));
     
-    // 3. Nối bằng [\W_]+ (khớp mọi ký tự ngăn cách như dấu chấm, gạch dưới, khoảng trắng...)
+    // 3. Nối bằng [\W_]+
     const pattern = words.join("[\\W_]+");
     return new RegExp(pattern, 'i');
 }
@@ -156,7 +155,16 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     const serverClean = normalizeForSearch(serverName);
 
     if (serverClean.includes("harry potter colection") && originalName.toLowerCase().includes("harry potter")) return true;
-    if (originalName.toLowerCase().includes("tom and jerry") && serverClean.includes("tom and jerry")) return true;
+
+    // --- SPECIAL BYPASS: Tom & Jerry OR Attack on Titan ---
+    // Bỏ qua check năm nếu tên khớp
+    const isSpecialCase = (
+        (originalName.toLowerCase().includes("tom and jerry") && serverClean.includes("tom and jerry")) ||
+        ((originalName.toLowerCase().includes("attack on titan") || originalName.toLowerCase().includes("shingeki no kyojin")) && 
+         (serverClean.includes("attack on titan") || serverClean.includes("shingeki no kyojin") || serverClean.includes("dai chien titan")))
+    );
+
+    if (isSpecialCase) return true;
 
     // Year Check
     let yearMatch = false;
@@ -240,7 +248,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     let year = parseInt(meta.year);
     const hasYear = !isNaN(year); 
 
-    // === LẤY TÊN TẬP PHIM TỪ CINEMETA ===
+    // === LẤY TÊN TẬP PHIM (Cho Special Mode) ===
     let targetEpisodeTitle = null;
     if (meta.videos && season !== null && episode !== null) {
         const currentVideo = meta.videos.find(v => v.season === season && v.episode === episode);
@@ -248,7 +256,13 @@ builder.defineStreamHandler(async ({ type, id }) => {
             targetEpisodeTitle = currentVideo.name || currentVideo.title;
         }
     }
+
+    // === CHECK SPECIAL MODE (T&J hoặc AoT) ===
     const isTomAndJerry = originalName.toLowerCase().includes("tom and jerry");
+    const isAttackOnTitan = originalName.toLowerCase().includes("attack on titan") || originalName.toLowerCase().includes("shingeki no kyojin");
+    
+    // Cờ kích hoạt chế độ dò tìm thông minh
+    const useSpecialMatching = isTomAndJerry || isAttackOnTitan;
 
     const queries = [];
     const lowerName = originalName.toLowerCase();
@@ -272,8 +286,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v36): "${originalName}" (${year}) | Type: ${type} ===`);
-    if (isTomAndJerry) console.log(`[Special] Tom & Jerry - Target: "${targetEpisodeTitle}" (Sanitized for Regex)`);
+    console.log(`\n=== Xử lý (v37): "${originalName}" (${year}) | Type: ${type} ===`);
+    if (useSpecialMatching) console.log(`[Special Mode Active] Target: "${targetEpisodeTitle}" (Sanitized for Regex)`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -304,13 +318,13 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return mappedVietnameseList.some(map => mClean.includes(normalizeForSearch(map)));
         });
         if (strictVietnameseMatches.length > 0) {
-            console.log(`-> (v36) Priority: Tìm thấy tên tiếng Việt ưu tiên.`);
+            console.log(`-> (v37) Priority: Tìm thấy tên tiếng Việt ưu tiên.`);
             matchedCandidates = strictVietnameseMatches;
         }
     }
 
     // 3. Golden Match
-    if (matchedCandidates.length > 1 && !isHarryPotter && !isTomAndJerry) {
+    if (matchedCandidates.length > 1 && !isHarryPotter && !useSpecialMatching) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
             let mClean = normalizeForSearch(m.name);
@@ -318,16 +332,16 @@ builder.defineStreamHandler(async ({ type, id }) => {
             return mClean === oClean;
         });
         if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) {
-             // Logic phụ trợ
+             // Priority logic
         }
     }
-    if (hasYear && matchedCandidates.length > 1 && !isHarryPotter && !isTomAndJerry) {
+    if (hasYear && matchedCandidates.length > 1 && !isHarryPotter && !useSpecialMatching) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
     // 4. Extended Isolation
-    if (cleanName.length <= 9 && matchedCandidates.length > 0 && !isTomAndJerry) {
+    if (cleanName.length <= 9 && matchedCandidates.length > 0 && !useSpecialMatching) {
         matchedCandidates = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
             const qClean = normalizeForSearch(originalName);
@@ -362,14 +376,13 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 if (sRes.data && sRes.data.streams) {
                     let streams = sRes.data.streams;
                     
-                    // --- TOM & JERRY SMART FILTER ---
-                    if (isTomAndJerry && targetEpisodeTitle) {
+                    // --- SPECIAL SMART FILTER (Movie Mode) ---
+                    if (useSpecialMatching && targetEpisodeTitle) {
                         const titleRegex = createSmartRegex(targetEpisodeTitle);
                         if (titleRegex) {
-                            console.log(`-> Scanning T&J streams for pattern: ${titleRegex}`);
+                            console.log(`-> Scanning streams for pattern: ${titleRegex}`);
                             streams = streams.filter(s => {
                                 const sName = s.title || s.name || "";
-                                // Clean sName for comparison? No, Regex [\W_] handles raw filenames well.
                                 return titleRegex.test(sName);
                             });
                         }
@@ -404,44 +417,41 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const metaRes = await axios.get(metaUrl, { headers: HEADERS });
                 if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) return [];
 
-                // --- (v36) PRE-FILTERING (Tăng tốc độ) ---
+                // --- PRE-FILTERING (Tăng tốc độ) ---
                 let matchedVideos = metaRes.data.meta.videos;
 
-                if (isTomAndJerry && targetEpisodeTitle) {
+                // Nếu là Mode đặc biệt (AoT hoặc T&J) -> Lọc theo Regex tiêu đề ngay trên RAM
+                if (useSpecialMatching && targetEpisodeTitle) {
                     const titleRegex = createSmartRegex(targetEpisodeTitle);
                     if (titleRegex) {
-                        // Lọc ngay trên RAM dựa vào tên Video trong Metadata
-                        // Chỉ giữ lại video nào có tên khớp Regex
                         const initialCount = matchedVideos.length;
                         matchedVideos = matchedVideos.filter(vid => {
                             const vidName = vid.title || vid.name || "";
                             return titleRegex.test(vidName);
                         });
-                        console.log(`-> T&J Optimization: Reduced scan from ${initialCount} to ${matchedVideos.length} items using Meta Title.`);
+                        console.log(`-> Special Optimization: Reduced scan from ${initialCount} to ${matchedVideos.length} items using Meta Title.`);
                     }
                 } else {
                     // Logic lọc series thông thường (dựa vào S/E)
                     matchedVideos = matchedVideos.filter(vid => {
                         const info = extractEpisodeInfo(vid.title || vid.name || "");
                         if (!info) return false;
-                        if (info.s === 0) return season === 1 && info.e === episode; // FIX TAXI DRIVER
+                        if (info.s === 0) return season === 1 && info.e === episode;
                         return info.s === season && info.e === episode;
                     });
                 }
 
                 let episodeStreams = [];
-                // Bây giờ vòng lặp này chỉ chạy 1-2 lần thay vì hàng trăm lần
                 for (const vid of matchedVideos) {
                     const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(vid.id)}.json`;
-                    // Chỉ gọi request nếu đã qua bộ lọc ở trên
                     const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
                     
                     if (sRes.data && sRes.data.streams) {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
                             
-                            // Double check stream name (cho chắc ăn)
-                            if (isTomAndJerry && targetEpisodeTitle) {
+                            // Double check stream name
+                            if (useSpecialMatching && targetEpisodeTitle) {
                                 const titleRegex = createSmartRegex(targetEpisodeTitle);
                                 if (titleRegex && !titleRegex.test(streamTitle)) return;
                             } else {
