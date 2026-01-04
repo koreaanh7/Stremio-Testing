@@ -18,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v35",
     version: "35.0.0",
-    name: "Phim4K VIP (Title Scan)",
-    description: "Added Strict Oppenheimer & Tom and Jerry Title Scanning",
+    name: "Phim4K VIP (Regex Master)",
+    description: "Fix Oppenheimer Strict & Tom and Jerry Regex",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,11 +28,11 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING ===
 const VIETNAMESE_MAPPING = {
-    // --- FIX V35 ---
-    "oppenheimer": ["oppenheimer"], // Kích hoạt Priority cho Oppenheimer
-    "tom and jerry": ["tom and jerry", "golden era anthology"], // Mapping cho T&J
+    // --- FIX MỚI (V35) ---
+    "oppenheimer": ["oppenheimer"], // Strict Check
+    "tom and jerry": ["tom and jerry the golden era anthology"], // Collection Mapping
 
-    // --- FIX V33/V34 ---
+    // --- CÁC FIX CŨ ---
     "shadow": ["vô ảnh"], 
     "boss": ["đại ca ha ha ha"], 
     "flow": ["lạc trôi", "straume"], 
@@ -117,11 +117,24 @@ function normalizeForSearch(title) {
         .trim();
 }
 
+// [MỚI] Hàm tạo Regex thông minh cho Tom and Jerry
+// Input: "Puss Gets The Boot" -> Output: /Puss[\s\.]+Gets[\s\.]+The[\s\.]+Boot/i
+function createSmartRegex(title) {
+    if (!title) return null;
+    // Chỉ giữ lại chữ cái, số và khoảng trắng
+    const clean = title.replace(/[^\w\s]/g, "").trim();
+    if (clean.length === 0) return null;
+    const parts = clean.split(/\s+/);
+    // Join các từ bằng cụm [\s\.]+ (chấp nhận dấu cách hoặc dấu chấm)
+    const pattern = parts.join("[\\s\\.]+"); 
+    return new RegExp(pattern, "i");
+}
+
 function extractEpisodeInfo(filename) {
     const name = filename.toLowerCase();
-    const matchSE = name.match(/(?:s|season)[\s\.]?(\d{1,4})[\s\xe.-]*(?:e|ep|episode|tap)[\s\.]?(\d{1,3})/);
+    const matchSE = name.match(/(?:s|season)[\s\.]?(\d{1,2})[\s\xe.-]*(?:e|ep|episode|tap)[\s\.]?(\d{1,3})/);
     if (matchSE) return { s: parseInt(matchSE[1]), e: parseInt(matchSE[2]) };
-    const matchX = name.match(/(\d{1,4})x(\d{1,3})/);
+    const matchX = name.match(/(\d{1,2})x(\d{1,3})/);
     if (matchX) return { s: parseInt(matchX[1]), e: parseInt(matchX[2]) };
     const matchE = name.match(/(?:e|ep|episode|tap|#)[\s\.]?(\d{1,4})/);
     if (matchE) return { s: 0, e: parseInt(matchE[1]) };
@@ -132,29 +145,20 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (candidate.type && candidate.type !== type) return false;
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
+    const lowerOrig = originalName.toLowerCase();
 
-    if (serverClean.includes("harry potter colection") && originalName.toLowerCase().includes("harry potter")) return true;
+    // Bypass check năm cho Tom and Jerry
+    const isTomAndJerry = lowerOrig.includes("tom and jerry");
+    
+    if (serverClean.includes("harry potter colection") && lowerOrig.includes("harry potter")) return true;
 
     // Year Check
     let yearMatch = false;
-    
-    // --- SPECIAL: OPPENHEIMER STRICT YEAR ---
-    if (normalizeForSearch(originalName) === "oppenheimer") {
-        // Bắt buộc phải là 2023 cho Oppenheimer
-        const exact2023 = serverName.includes("2023") || (candidate.releaseInfo && candidate.releaseInfo.includes("2023"));
-        if (!exact2023) return false;
-        yearMatch = true;
-    } 
-    // --- SPECIAL: TOM AND JERRY ---
-    else if (normalizeForSearch(originalName).includes("tom and jerry")) {
-        // Tom and Jerry chấp nhận dải năm rộng hoặc Collection
-        yearMatch = true; 
-    }
-    else if (!hasYear) yearMatch = true;
+    if (!hasYear || isTomAndJerry) yearMatch = true; // [FIX] T&J luôn đúng năm
     else {
         const yearMatches = serverName.match(/\d{4}/g);
         if (yearMatches) {
-            const tolerance = (type === 'series' || originalName.toLowerCase().includes('naruto')) ? 2 : 1;
+            const tolerance = (type === 'series' || lowerOrig.includes('naruto')) ? 2 : 1;
             yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= tolerance);
         } else if (candidate.releaseInfo) {
             yearMatch = candidate.releaseInfo.includes(year.toString()) 
@@ -162,7 +166,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
                      || candidate.releaseInfo.includes((year+1).toString());
         } else yearMatch = true;
     }
-
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
@@ -273,20 +276,32 @@ builder.defineStreamHandler(async ({ type, id }) => {
     );
 
     const isHarryPotter = originalName.toLowerCase().includes("harry potter");
-    // [V35] Detect Tom and Jerry
     const isTomAndJerry = originalName.toLowerCase().includes("tom and jerry");
+    const isOppenheimer = originalName.toLowerCase().trim() === "oppenheimer";
 
     // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. VIETNAMESE PRIORITY FILTER
+    // 2. VIETNAMESE PRIORITY & STRICT FILTER
     if (mappedVietnameseList.length > 0) {
         const strictVietnameseMatches = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
+            
+            // [FIX] OPPENHEIMER SUPER STRICT
+            // Nếu là Oppenheimer, chỉ lấy nếu tên sạch (ngắn) hoặc khớp chính xác năm
+            if (isOppenheimer) {
+                // Loại bỏ nếu có "documentary" hoặc "real story"
+                if (mClean.includes("documentary") || mClean.includes("real story") || mClean.includes("chuyện thật")) return false;
+                // Chỉ lấy nếu độ dài tên server không quá chênh lệch so với "oppenheimer"
+                // "oppenheimer" (11 chars). "oppenheimer 2023" (15 chars).
+                if (mClean.length > 20) return false; 
+            }
+
             return mappedVietnameseList.some(map => mClean.includes(normalizeForSearch(map)));
         });
+        
         if (strictVietnameseMatches.length > 0) {
-            console.log(`-> (v35) Priority: Tìm thấy tên tiếng Việt/Mapping ưu tiên. Loại bỏ các kết quả rác.`);
+            console.log(`-> (v35) Priority: Tìm thấy kết quả ưu tiên. Loại bỏ rác.`);
             matchedCandidates = strictVietnameseMatches;
         }
     }
@@ -299,32 +314,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
             mClean = mClean.replace(year.toString(), "").trim();
             return mClean === oClean;
         });
-        if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) {
-            // Priority logic
-        }
+        // Priority logic
     }
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter && !isTomAndJerry) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
-    }
-
-    // 4. Extended Isolation
-    if (cleanName.length <= 9 && matchedCandidates.length > 0) {
-        matchedCandidates = matchedCandidates.filter(m => {
-            const mClean = normalizeForSearch(m.name);
-            const qClean = normalizeForSearch(originalName);
-            if (mappedVietnameseList.length > 0) {
-                const matchesMap = mappedVietnameseList.some(map => {
-                    const mapClean = normalizeForSearch(map);
-                    return mClean.includes(mapClean);
-                });
-                if (matchesMap) return true;
-            }
-            const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
-            const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
-            const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
-            return endsWithExact || isExact || startsWithExact;
-        });
     }
 
     if (matchedCandidates.length === 0) return { streams: [] };
@@ -372,25 +366,22 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 const metaRes = await axios.get(metaUrl, { headers: HEADERS });
                 if (!metaRes.data || !metaRes.data.meta || !metaRes.data.meta.videos) return [];
 
-                // --- V35: SPECIAL TOM AND JERRY EPISODE TITLE FETCHING ---
-                let targetEpisodeRegex = null;
-                if (isTomAndJerry) {
-                    // Tìm metadata của tập phim đang yêu cầu
-                    const vid = metaRes.data.meta.videos.find(v => {
-                         // Check theo season/episode hoặc id nếu cần
-                         return (v.season === season && v.episode === episode) || (v.id === id);
-                    });
-                    if (vid && (vid.title || vid.name)) {
-                        const epTitle = vid.title || vid.name; // e.g., "Puss Gets The Boot"
-                        console.log(`[T&J Scan] Target: "${epTitle}"`);
-                        // Tạo Regex: "Puss Gets The Boot" -> /Puss[\W_.]+Gets[\W_.]+The[\W_.]+Boot/i
-                        // Cho phép khớp với Puss.Gets.The.Boot hoặc Puss_Gets_The_Boot
-                        const regexPattern = epTitle.split(/\s+/).filter(w => w.length > 0).join("[\\W_.]+");
-                        targetEpisodeRegex = new RegExp(regexPattern, 'i');
-                    }
-                }
+                // Lấy thông tin tập phim User đang chọn để tìm Tên Tập (cho Tom and Jerry)
+                let targetEpisodeTitle = null;
+                const userSelectedVideo = metaRes.data.meta.videos.find(v => {
+                     // Lưu ý: Cinemeta video S/E có thể khác request một chút, nhưng ta cần tìm đúng video object
+                     // Với T&J, ta so khớp S/E
+                     const vidInfo = extractEpisodeInfo(v.title || ""); 
+                     // Nếu extract fail thì so khớp bằng season/episode properties
+                     if (v.season === season && v.episode === episode) return true;
+                     return false;
+                });
+                if (userSelectedVideo) targetEpisodeTitle = userSelectedVideo.title;
 
                 const matchedVideos = metaRes.data.meta.videos.filter(vid => {
+                    // Nếu là Tom and Jerry, ta lấy hết video để duyệt sau (vì structure lộn xộn)
+                    if (isTomAndJerry) return true;
+
                     const info = extractEpisodeInfo(vid.title || vid.name || "");
                     if (!info) return false;
                     // FIX TAXI DRIVER
@@ -407,21 +398,37 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
                             
-                            // --- V35: TOM AND JERRY TITLE SCAN LOGIC ---
-                            if (isTomAndJerry && targetEpisodeRegex) {
-                                // Nếu là T&J, bỏ qua check Season/Episode, chỉ check tên tập
-                                if (!targetEpisodeRegex.test(streamTitle)) {
-                                    return; // Không khớp tên tập -> Bỏ qua
+                            // === LOGIC TOM AND JERRY (REGEX SCAN) ===
+                            if (isTomAndJerry && targetEpisodeTitle) {
+                                // Tạo Regex từ tên tập (Puss Gets The Boot -> Puss.*Gets.*The.*Boot)
+                                const smartRegex = createSmartRegex(targetEpisodeTitle);
+                                if (smartRegex && smartRegex.test(streamTitle)) {
+                                     // Nếu khớp tên tập -> LẤY NGAY
+                                     console.log(`[DEBUG T&J] Match Found via Regex: ${streamTitle}`);
+                                     console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Series: ${s.title}`);
+                                     episodeStreams.push({
+                                        name: `Phim4K T&J`,
+                                        title: (s.title || vid.title) + `\n[${match.name}]`,
+                                        url: s.url,
+                                        behaviorHints: { 
+                                            notWebReady: false, 
+                                            bingeGroup: "phim4k-vip",
+                                            proxyHeaders: { request: { "User-Agent": "KSPlayer/1.0" } },
+                                            headers: { "User-Agent": "KSPlayer/1.0" }
+                                        }
+                                    });
+                                    return; // Xong stream này
                                 }
-                                // Nếu khớp tên tập -> LẤY LUÔN
-                            } else {
-                                // --- LOGIC CŨ (Series thường) ---
-                                const streamInfo = extractEpisodeInfo(streamTitle);
-                                if (streamInfo) {
-                                    if (streamInfo.s === 0) { if (season !== 1) return; } 
-                                    else { if (streamInfo.s !== season) return; }
-                                    if (streamInfo.e !== episode) return;
-                                }
+                                return; // Không khớp regex thì bỏ qua
+                            }
+                            // =========================================
+
+                            // LOGIC THƯỜNG (S/E Check)
+                            const streamInfo = extractEpisodeInfo(streamTitle);
+                            if (streamInfo) {
+                                if (streamInfo.s === 0) { if (season !== 1) return; } 
+                                else { if (streamInfo.s !== season) return; }
+                                if (streamInfo.e !== episode) return;
                             }
                             
                             console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Series: ${s.title}`);
@@ -439,6 +446,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                             });
                         });
                     }
+                    // Nếu là Tom and Jerry và đã tìm thấy stream rồi thì có thể break loop videos để tối ưu (tuỳ chọn)
                 }
                 return episodeStreams;
             }
