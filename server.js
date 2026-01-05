@@ -18,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v37",
     version: "37.0.0",
-    name: "Phim4K VIP (Custom Fixes)",
-    description: "T&J, Regular Show S3+, Oppenheimer Strict, AoT Offset",
+    name: "Phim4K VIP (AoT & Regular Show Fix)",
+    description: "Fixed AoT numbering, Oppenheimer strict filter & Regular Show title match",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -30,8 +30,10 @@ const builder = new addonBuilder({
 const VIETNAMESE_MAPPING = {
     // --- SPECIAL CASES ---
     "tom and jerry": ["tom and jerry the golden era anthology", "tom and jerry 1990"],
-    "oppenheimer": ["oppenheimer 2023"], // [MỚI] Map cứng kèm năm
-    "regular show": ["regular show"],      // [MỚI] Để trigger logic
+    "regular show": ["regular show"], // Thêm để đảm bảo tìm thấy
+    
+    // --- STRICT FIX ---
+    "oppenheimer": ["oppenheimer"], // Map cứng để sau đó lọc strict
 
     // --- FIX PRIORITY (v33) ---
     "shadow": ["vô ảnh"], 
@@ -72,7 +74,7 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 1": ["harry potter colection"],
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 
-    // --- GHIBLI & ANIME ---
+    // --- GHIBLI & OTHERS ---
     "bet": ["học viện đỏ đen"],
     "sisu: road to revenge": ["sisu 2"],
     "chainsaw man - the movie: reze arc": ["chainsaw man movie", "reze arc"],
@@ -131,29 +133,34 @@ function extractEpisodeInfo(filename) {
     return null;
 }
 
-// === (v37) SMART REGEX BUILDER ===
-// Đã thêm dấu : và , vào danh sách loại bỏ
+// === SMART REGEX BUILDER (v37 Updated) ===
+// Loại bỏ: ' " ! ? . , : (Thêm dấu hai chấm và phẩy theo yêu cầu)
 function createSmartRegex(episodeName) {
     if (!episodeName) return null;
     
-    // 1. Xóa ký tự đặc biệt (' ! ? . , :)
+    // 1. Xóa ký tự đặc biệt
     let cleanName = episodeName.replace(/['"!?,.:]/g, ""); 
     cleanName = cleanName.trim();
     if (cleanName.length === 0) return null;
     
-    // 2. Tách từ và tạo Pattern
+    // 2. Tách từ & tạo Pattern
     const words = cleanName.split(/\s+/).map(w => w.replace(/[.*+^${}()|[\]\\]/g, '\\$&'));
     const pattern = words.join("[\\W_]+");
     return new RegExp(pattern, 'i');
 }
 
-// === (v37) ATTACK ON TITAN OFFSET ===
-function getAoTOffset(season) {
-    if (season === 1) return 0;
-    if (season === 2) return 25; // S2E01 là tập 26
-    if (season === 3) return 37; // S3E01 là tập 38
-    if (season >= 4) return 59;  // S4E01 là tập 60
-    return 0;
+// === ATTACK ON TITAN OFFSET CALCULATOR (FAST) ===
+function getAoTAbsoluteEpisode(season, episode) {
+    // S1: 1-25
+    if (season === 1) return episode; 
+    // S2: starts at 26 (Offset 25)
+    if (season === 2) return episode + 25;
+    // S3: starts at 38 (Offset 25 + 12 = 37)
+    if (season === 3) return episode + 37;
+    // S4: starts at 60 (Offset 37 + 22 = 59)
+    if (season === 4) return episode + 59;
+    
+    return null; // Fallback
 }
 
 function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseList, queries) {
@@ -161,19 +168,10 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
-    // Bypass strict year for collections
     if (serverClean.includes("harry potter colection") && originalName.toLowerCase().includes("harry potter")) return true;
     if (originalName.toLowerCase().includes("tom and jerry") && serverClean.includes("tom and jerry")) return true;
+    // Regular Show match logic
     if (originalName.toLowerCase().includes("regular show") && serverClean.includes("regular show")) return true;
-
-    // === (v37) OPPENHEIMER STRICT CHECK ===
-    if (originalName.toLowerCase() === "oppenheimer") {
-        // Chỉ chấp nhận nếu tên server có chứa "2023"
-        // Và phải là Oppehheimer (không phải documentary)
-        if (!serverName.includes("2023")) return false;
-        if (serverClean.includes("documentary") || serverClean.includes("story") || serverClean.includes("real")) return false;
-        return true;
-    }
 
     // Year Check
     let yearMatch = false;
@@ -192,8 +190,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // Check Mapping & Queries
-    // (Logic cũ giữ nguyên)
+    // Check Mapping
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
@@ -205,6 +202,8 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
             }
         }
     }
+
+    // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
         if (qClean.length <= 9) {
@@ -226,7 +225,6 @@ function checkExactYear(candidate, targetYear) {
 }
 
 function passesSubtitleCheck(candidateName, originalName, queries) {
-    // (Logic cũ giữ nguyên)
     const cleanOrig = normalizeForSearch(originalName);
     const cleanCand = normalizeForSearch(candidateName);
     if (originalName.includes(":")) {
@@ -256,20 +254,19 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const originalName = meta.name;
     let year = parseInt(meta.year);
     const hasYear = !isNaN(year); 
-    const lowerName = originalName.toLowerCase();
 
-    // === PHÂN LOẠI XỬ LÝ ĐẶC BIỆT ===
-    const isTomAndJerry = lowerName.includes("tom and jerry");
-    // Regular Show chỉ dùng Smart Regex khi Season >= 3
-    const isRegularShow = lowerName.includes("regular show") && season >= 3; 
-    const isAttackOnTitan = lowerName.includes("attack on titan") || lowerName.includes("shingeki no kyojin");
-    const isOppenheimer = lowerName === "oppenheimer";
+    // === DETECT FLAGS (v37) ===
+    const isTomAndJerry = originalName.toLowerCase().includes("tom and jerry");
+    const isRegularShow = originalName.toLowerCase().includes("regular show");
+    const isAoT = originalName.toLowerCase().includes("attack on titan");
+    const isOppenheimer = originalName.toLowerCase() === "oppenheimer";
 
-    // === LẤY TÊN TẬP (CHO REGEX MATCH) ===
+    // === LẤY TÊN TẬP PHIM TỪ CINEMETA (Cho T&J và Regular Show) ===
     let targetEpisodeTitle = null;
-    const useTitleMatch = isTomAndJerry || isRegularShow;
+    // Regular Show chỉ áp dụng Regex cho Season >= 3
+    const useTitleMatching = isTomAndJerry || (isRegularShow && season >= 3);
 
-    if (useTitleMatch && meta.videos && season !== null && episode !== null) {
+    if (useTitleMatching && meta.videos && season !== null && episode !== null) {
         const currentVideo = meta.videos.find(v => v.season === season && v.episode === episode);
         if (currentVideo) {
             targetEpisodeTitle = currentVideo.name || currentVideo.title;
@@ -277,6 +274,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     }
 
     const queries = [];
+    const lowerName = originalName.toLowerCase();
     
     let mappedVietnameseList = [];
     const mappingRaw = VIETNAMESE_MAPPING[lowerName];
@@ -297,11 +295,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v37): "${originalName}" (S${season}E${episode}) | Type: ${type} ===`);
-    
-    if (useTitleMatch) console.log(`[Mode] Title Match Active. Target: "${targetEpisodeTitle}"`);
-    if (isAttackOnTitan) console.log(`[Mode] AoT Offset Active. Offset: +${getAoTOffset(season)}`);
-    if (isOppenheimer) console.log(`[Mode] Oppenheimer Strict Active.`);
+    console.log(`\n=== Xử lý (v37): "${originalName}" (${year}) | Type: ${type} ===`);
+    if (useTitleMatching) console.log(`[Special] Title Match Active - Target: "${targetEpisodeTitle}"`);
+    if (isAoT) console.log(`[Special] AoT Fast Offset Active`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -320,32 +316,69 @@ builder.defineStreamHandler(async ({ type, id }) => {
         isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
     );
 
-    const isHarryPotter = lowerName.includes("harry potter");
+    // === (v37) STRICT FILTER FOR OPPENHEIMER ===
+    if (isOppenheimer) {
+        console.log(`-> (v37) Strict Filter: Oppenheimer Detected. Purging non-exact matches.`);
+        matchedCandidates = matchedCandidates.filter(m => {
+            return m.name.toLowerCase() === "oppenheimer" && (m.year === "2023" || (m.releaseInfo && m.releaseInfo.includes("2023")));
+        });
+    }
+
+    const isHarryPotter = originalName.toLowerCase().includes("harry potter");
 
     // 1. Subtitle Check
     matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
 
-    // 2. Priority Filter (Giữ nguyên)
-    if (mappedVietnameseList.length > 0 && !isOppenheimer) { // Oppenheimer đã xử lý strict ở trên
+    // 2. VIETNAMESE PRIORITY
+    if (mappedVietnameseList.length > 0) {
         const strictVietnameseMatches = matchedCandidates.filter(m => {
             const mClean = normalizeForSearch(m.name);
             return mappedVietnameseList.some(map => mClean.includes(normalizeForSearch(map)));
         });
         if (strictVietnameseMatches.length > 0) {
+            console.log(`-> Priority: Tìm thấy tên tiếng Việt ưu tiên.`);
             matchedCandidates = strictVietnameseMatches;
         }
     }
 
-    // 3. Golden Match & Exact Year (Bypass cho Tom & Jerry / Regular Show)
-    if (matchedCandidates.length > 1 && !isHarryPotter && !useTitleMatch && !isOppenheimer) {
-        if (hasYear) {
-            const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
-            if (exactMatches.length > 0) matchedCandidates = exactMatches;
+    // 3. Golden Match
+    if (matchedCandidates.length > 1 && !isHarryPotter && !useTitleMatching && !isAoT) {
+        const oClean = normalizeForSearch(originalName);
+        const goldenMatches = matchedCandidates.filter(m => {
+            let mClean = normalizeForSearch(m.name);
+            mClean = mClean.replace(year.toString(), "").trim();
+            return mClean === oClean;
+        });
+        if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) {
+             // Logic phụ trợ
         }
+    }
+    if (hasYear && matchedCandidates.length > 1 && !isHarryPotter && !useTitleMatching && !isAoT) {
+        const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
+        if (exactMatches.length > 0) matchedCandidates = exactMatches;
+    }
+
+    // 4. Extended Isolation
+    if (cleanName.length <= 9 && matchedCandidates.length > 0 && !useTitleMatching) {
+        matchedCandidates = matchedCandidates.filter(m => {
+            const mClean = normalizeForSearch(m.name);
+            const qClean = normalizeForSearch(originalName);
+            if (mappedVietnameseList.length > 0) {
+                const matchesMap = mappedVietnameseList.some(map => {
+                    const mapClean = normalizeForSearch(map);
+                    return mClean.includes(mapClean);
+                });
+                if (matchesMap) return true;
+            }
+            const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
+            const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
+            const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
+            return endsWithExact || isExact || startsWithExact;
+        });
     }
 
     if (matchedCandidates.length === 0) return { streams: [] };
-    console.log(`-> KẾT QUẢ TÌM KIẾM:`);
+    console.log(`-> KẾT QUẢ CUỐI CÙNG:`);
     matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
 
     let allStreams = [];
@@ -362,11 +395,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     let streams = sRes.data.streams;
                     
                     // --- MOVIE FILTERS ---
-                    if (useTitleMatch && targetEpisodeTitle) {
+                    if (useTitleMatching && targetEpisodeTitle) {
                         const titleRegex = createSmartRegex(targetEpisodeTitle);
-                        if (titleRegex) streams = streams.filter(s => titleRegex.test(s.title || s.name || ""));
-                    } 
-                    else if (isHarryPotter && hpKeywords) {
+                        if (titleRegex) {
+                            streams = streams.filter(s => titleRegex.test(s.title || s.name || ""));
+                        }
+                    } else if (isHarryPotter && hpKeywords) {
                         streams = streams.filter(s => {
                             const sTitle = (s.title || s.name || "").toLowerCase();
                             const hasKeyword = hpKeywords.some(kw => sTitle.includes(kw));
@@ -376,7 +410,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     }
 
                     return streams.map(s => {
-                        console.log(`[DEBUG UA] Movie: ${s.title || s.name}`);
+                        console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Movie: ${s.title || s.name}`);
                         return {
                             name: "Phim4K VIP", 
                             title: s.title || s.name,
@@ -397,40 +431,34 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
                 let matchedVideos = metaRes.data.meta.videos;
 
-                // --- (v37) LOGIC LỌC VIDEO TRƯỚC KHI GỌI API ---
-                if (useTitleMatch && targetEpisodeTitle) {
-                    // 1. Regular Show S3+ & Tom Jerry: Lọc theo Tên Tập
+                // --- (v37) LOGIC LỌC SERIES TỐI ƯU ---
+
+                if (useTitleMatching && targetEpisodeTitle) {
+                    // 1. REGULAR SHOW (S3+) & TOM AND JERRY
                     const titleRegex = createSmartRegex(targetEpisodeTitle);
                     if (titleRegex) {
                         matchedVideos = matchedVideos.filter(vid => titleRegex.test(vid.title || vid.name || ""));
                     }
+                } else if (isAoT) {
+                    // 2. ATTACK ON TITAN FAST OFFSET
+                    // Không cần lọc matchedVideos ở đây vì Phim4K để chung 1 cục, ta sẽ duyệt và tính toán bên dưới
+                    // Tuy nhiên để tối ưu request, ta chỉ cần bất kỳ video nào (vì AoT trên Phim4K thường là 1 list video hỗn hợp)
+                    // Nhưng an toàn nhất là giữ nguyên list videos và check tên file ở bước sau.
                 } else {
-                    // 2. Logic Thông thường (bao gồm AoT, Regular Show S1-S2)
+                    // 3. NORMAL SERIES
                     matchedVideos = matchedVideos.filter(vid => {
                         const info = extractEpisodeInfo(vid.title || vid.name || "");
                         if (!info) return false;
-                        
-                        // FIX: Taxi Driver (Giữ nguyên)
-                        if (info.s === 0) return season === 1 && info.e === episode;
-                        
-                        // NOTE: AoT Logic áp dụng ở bước check Stream bên dưới
-                        // Ở bước lọc Meta này, ta cứ lấy đúng Season/Episode theo metadata của Phim4K trước
-                        // (Thường thì Phim4K meta vẫn đánh số S1E25, nhưng tên file stream mới là S1E25 hoặc tập 25)
-                        // Tuy nhiên, nếu Phim4K đánh số Metadata kiểu Absolute (Episode 26) thì logic này có thể miss.
-                        // Nhưng do ta không biết cấu trúc Meta cụ thể của AoT trên server Phim4K, 
-                        // ta sẽ lấy TẤT CẢ video trong season đó hoặc lọc lỏng hơn.
-                        // ĐỂ AN TOÀN CHO AOT: Ta lấy tất cả video khớp Season hoặc khớp số tập Absolute.
-                        
-                        if (isAttackOnTitan) {
-                             // AoT Logic: Lấy hết video của Season đó để check tên stream sau
-                             return info.s === season || (season > 1 && info.s === 0); 
-                        }
-
+                        if (info.s === 0) return season === 1 && info.e === episode; // Taxi Driver Fix
                         return info.s === season && info.e === episode;
                     });
                 }
 
                 let episodeStreams = [];
+                
+                // Attack on Titan Target Calculation
+                const aotTargetEp = isAoT ? getAoTAbsoluteEpisode(season, episode) : null;
+
                 for (const vid of matchedVideos) {
                     const vidStreamUrl = `${TARGET_BASE_URL}/stream/${type}/${encodeURIComponent(vid.id)}.json`;
                     const sRes = await axios.get(vidStreamUrl, { headers: HEADERS });
@@ -439,36 +467,19 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
                             
-                            // --- FINAL STREAM CHECK ---
-                            if (useTitleMatch && targetEpisodeTitle) {
-                                // Logic: Regex Tên Tập (Regular S3+, T&J)
+                            // --- FINAL FILTERING ---
+                            if (useTitleMatching && targetEpisodeTitle) {
                                 const titleRegex = createSmartRegex(targetEpisodeTitle);
                                 if (titleRegex && !titleRegex.test(streamTitle)) return;
                             } 
-                            else if (isAttackOnTitan) {
-                                // Logic: AoT Offset Check
-                                // Tính toán số tập file cần tìm
-                                const offset = getAoTOffset(season);
-                                const targetFileEp = episode + offset;
-                                
-                                const info = extractEpisodeInfo(streamTitle);
-                                if (!info) return;
-
-                                // So sánh: File phải khớp số tập đã cộng dồn
-                                // Ví dụ: Cần xem S2E1 -> Tìm tập 26
-                                // File có thể tên là "S2 E26" hoặc "Episode 26"
-                                if (info.e !== targetFileEp) return;
-                                
-                                // Nếu file có Season, phải khớp Season hoặc S=0
-                                if (info.s !== 0 && info.s !== season) {
-                                    // Trường hợp đặc biệt: File tên "Attack on Titan - 26" (S=0) -> OK
-                                    // Nếu File tên "S2 E26" -> OK
-                                    // Nếu File tên "S1 E26" -> Sai
-                                    return; 
-                                }
+                            else if (isAoT && aotTargetEp !== null) {
+                                // Logic AoT: Tìm tập có số tuyệt đối (VD: 26) trong tên file
+                                // Regex: Tìm số đứng riêng lẻ hoặc sau chữ E/Ep
+                                const epRegex = new RegExp(`(?:e|ep|episode|tap|^|\\s)${aotTargetEp}(?:$|\\s|\\D)`, 'i');
+                                if (!epRegex.test(streamTitle)) return;
                             }
                             else {
-                                // Logic: Series thường (Regular S1-S2, phim khác)
+                                // Logic thường
                                 const streamInfo = extractEpisodeInfo(streamTitle);
                                 if (streamInfo) {
                                     if (streamInfo.s === 0) { if (season !== 1) return; } 
@@ -477,7 +488,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 }
                             }
 
-                            console.log(`[DEBUG UA] Series: ${s.title}`);
+                            console.log(`[DEBUG USER-AGENT] Injecting KSPlayer/1.0 for Series: ${s.title}`);
                             episodeStreams.push({
                                 name: `Phim4K S${season}E${episode}`,
                                 title: (s.title || vid.title) + `\n[${match.name}]`,
