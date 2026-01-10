@@ -18,31 +18,28 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v40",
     version: "40.0.0",
-    name: "Phim4K VIP (Absolute Anime Unified)",
-    description: "Unified logic for AoT, MHA, Naruto/Shippuden, Fixed DS & RegShow",
+    name: "Phim4K VIP (Absolute Anime)",
+    description: "Integrated AoT, MHA, Naruto Shippuden into Absolute Engine. Fixed Regular Show & Demon Slayer.",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MAPPING ===
+// === 1. TỪ ĐIỂN MAPPING (CẬP NHẬT MỚI) ===
 const VIETNAMESE_MAPPING = {
     // --- SPECIAL CASES ---
     "tom and jerry": ["tom and jerry the golden era anthology", "tom and jerry 1990"],
     "demon slayer: kimetsu no yaiba": ["thanh gươm diệt quỷ", "kimetsu no yaiba"],
-    
-    // ABSOLUTE ANIME GROUP
-    "my hero academia": ["học viện siêu anh hùng", "boku no hero academia"],
-    "naruto shippuden": ["naruto shippuuden"],
-    "naruto": ["naruto 2002", "cửu vĩ hồ"], // Naruto Classic
+    "my hero academia": ["học viện siêu anh hùng", "boku no hero academia"], // [NEW]
+    "naruto: shippuden": ["naruto shippuden"], // [NEW]
+    "naruto shippuden": ["naruto shippuden"],
 
     // GAME OF THRONES
     "game of thrones": ["trò chơi vương quyền (uhd) game of thrones", "trò chơi vương quyền (2011) game of thrones"],
-    // OPPENHEIMER
     "oppenheimer": ["oppenheimer 2023"],
 
-    // --- OTHERS ---
+    // --- FIX PRIORITY ---
     "shadow": ["vô ảnh"], 
     "boss": ["đại ca ha ha ha"], 
     "flow": ["lạc trôi", "straume"], 
@@ -66,7 +63,7 @@ const VIETNAMESE_MAPPING = {
     "f1: the movie": ["f1"],
     "sentimental value": ["giá trị tình cảm"],
     "dark": ["đêm lặng"],
-    "el camino: a breaking bad movie": ["el camino", "tập làm người xấu movie"],
+    "el camino: a breaking bad movie": ["el camino"],
     
     // --- HARRY POTTER ---
     "harry potter and the sorcerer's stone": ["harry potter colection"],
@@ -79,64 +76,39 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 1": ["harry potter colection"],
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 
-    // --- GHIBLI & ANIME ---
-    "bet": ["học viện đỏ đen"],
-    "sisu: road to revenge": ["sisu 2"],
-    "chainsaw man - the movie: reze arc": ["chainsaw man movie", "reze arc"],
-    "10 dance": ["10dance", "10 dance"],
+    // --- GHIBLI & OTHERS ---
     "princess mononoke": ["công chúa mononoke", "mononoke hime"],
-    "ocean waves": ["những con sóng đại dương", "sóng đại dương"],
-    "the red turtle": ["rùa đỏ"],
-    "from up on poppy hill": ["ngọn đồi hoa hồng anh"],
-    "the secret world of arrietty": ["thế giới bí mật của arrietty"],
-    "the cat returns": ["loài mèo trả ơn"],
-    "only yesterday": ["chỉ còn ngày hôm qua"],
-    "the wind rises": ["gió vẫn thổi", "gió nổi"],
-    "the boy and the heron": ["thiếu niên và chim diệc"],
-    "howl's moving castle": ["lâu đài bay của pháp sư howl"],
     "spirited away": ["vùng đất linh hồn"],
+    "howl's moving castle": ["lâu đài bay của pháp sư howl"],
     "my neighbor totoro": ["hàng xóm của tôi là totoro"],
     "grave of the fireflies": ["mộ đom đóm"],
-    "ponyo": ["cô bé người cá ponyo"],
-    "weathering with you": ["đứa con của thời tiết"],
     "your name": ["tên cậu là gì"],
+    "weathering with you": ["đứa con của thời tiết"],
     "suzume": ["khóa chặt cửa nào suzume"],
     "5 centimeters per second": ["5 centimet trên giây"],
     "naruto": ["naruto"]
 };
 
-// === 2. CẤU HÌNH ABSOLUTE NUMBERING (UNIFIED) ===
-// Cấu trúc: "tên phim": { Mùa: Số_Tập_Bắt_Đầu_Của_Mùa }
-// Hệ thống sẽ tự tính Offset = Start - 1
-const ABSOLUTE_ANIME_MAP = {
-    "attack on titan": {
-        1: null, // Mùa 1 dùng S/E chuẩn
-        2: 26,   // S2E1 là tập 26
-        3: 38,   // S3E1 là tập 38
-        4: 60    // S4E1 là tập 60
+// === 2. ABSOLUTE ANIME ENGINE (CẤU HÌNH TẬP TRUNG) ===
+// Key: Tên phim (lowercase)
+// Value: Object map { Season: Offset } (Offset là số lượng tập của các mùa trước cộng lại)
+const ABSOLUTE_OFFSETS = {
+    "attack on titan": { 
+        2: 25, 3: 37, 4: 59 
     },
     "my hero academia": {
-        1: 1,    // Chuẩn
-        2: 15,   // User: S2E1 = 15
-        3: 41,   // User: S3E1 = 41
-        4: 66,   // User: S4E1 = 66
-        5: 93,   // User: S5E1 = 93
-        6: 120,  // User: S6E1 = 120
-        7: 150   // User: S7E1 = 150
+        2: 14, 3: 40, 4: 65, 5: 92, 6: 119, 7: 149
     },
+    "naruto: shippuden": {
+        2: 32, 3: 53, 4: 71, 5: 88, 6: 112, 7: 143, 8: 151, 9: 175, 10: 196,
+        11: 222, 12: 242, 13: 260, 14: 295, 15: 320, 16: 348, 17: 361, 18: 393,
+        19: 413, 20: 431, 21: 450, 22: 458 
+    },
+    // Backup key nếu tên trả về khác
     "naruto shippuden": {
-        1: 1,
-        2: 33, 3: 54, 4: 72, 5: 89, 6: 113, 7: 144, 8: 152, 9: 176,
-        10: 197, 11: 223, 12: 243, 13: 261, 14: 296, 15: 321, 16: 349,
-        17: 362, 18: 394, 19: 414, 20: 432, 21: 451, 22: 459
-    },
-    "naruto": {
-        // Naruto 2002 (Map mùa TVDB sang số tập tuyệt đối 1-220)
-        1: 1,
-        2: 36,   // S1 có 35 tập
-        3: 84,   // S2 kết thúc ở 83
-        4: 132,  // S3 kết thúc ở 131
-        5: 186   // S4 kết thúc ở 185
+        2: 32, 3: 53, 4: 71, 5: 88, 6: 112, 7: 143, 8: 151, 9: 175, 10: 196,
+        11: 222, 12: 242, 13: 260, 14: 295, 15: 320, 16: 348, 17: 361, 18: 393,
+        19: 413, 20: 431, 21: 450, 22: 458 
     }
 };
 
@@ -154,22 +126,20 @@ function getHPKeywords(originalName) {
     return null;
 }
 
-// [UNIFIED FUNCTION] Tính số tập tuyệt đối
-function getAbsoluteTarget(animeName, season, episode) {
-    const lowerName = animeName.toLowerCase();
-    // Tìm key khớp trong map (vì tên có thể dài hơn, ví dụ "naruto shippuden" vs "naruto")
-    let key = Object.keys(ABSOLUTE_ANIME_MAP).find(k => lowerName.includes(k));
+// [NEW] Unified Function for Absolute Numbering
+function getAbsoluteAnimeNumber(originalName, season, episode) {
+    const lowerName = originalName.toLowerCase();
     
-    // Đặc biệt phân biệt Naruto và Naruto Shippuden
-    if (key === 'naruto' && lowerName.includes('shippuden')) key = 'naruto shippuden';
-
-    if (key && ABSOLUTE_ANIME_MAP[key][season]) {
-        const startEp = ABSOLUTE_ANIME_MAP[key][season];
-        if (startEp === null) return null; // Force S/E Standard (như AoT S1)
-        const offset = startEp - 1;
-        return offset + episode;
+    // Tìm key phù hợp trong bảng cấu hình
+    const configKey = Object.keys(ABSOLUTE_OFFSETS).find(k => lowerName.includes(k));
+    
+    if (configKey) {
+        const mapping = ABSOLUTE_OFFSETS[configKey];
+        if (mapping[season] !== undefined) {
+            return mapping[season] + episode;
+        }
     }
-    return null;
+    return null; // Trả về null nghĩa là dùng Standard Mode (S1 hoặc các season không define)
 }
 
 function normalizeForSearch(title) {
@@ -186,6 +156,7 @@ function extractEpisodeInfo(filename) {
     if (matchSE) return { s: parseInt(matchSE[1]), e: parseInt(matchSE[2]) };
     const matchX = name.match(/(\d{1,2})x(\d{1,3})/);
     if (matchX) return { s: parseInt(matchX[1]), e: parseInt(matchX[2]) };
+    // Absolute number extraction
     const matchE = name.match(/(?:e|ep|episode|tap|#)[\s\.]?(\d{1,4})/);
     if (matchE) return { s: 0, e: parseInt(matchE[1]) };
     return null;
@@ -206,20 +177,14 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
-    // Bypass & Forced Match
     if (serverClean.includes("harry potter colection") && originalName.toLowerCase().includes("harry potter")) return true;
     if (originalName.toLowerCase().includes("tom and jerry") && serverClean.includes("tom and jerry")) return true;
     if (originalName.toLowerCase().includes("regular show") && serverClean.includes("regular show")) return true;
     if (originalName.toLowerCase().includes("game of thrones") && serverClean.includes("game of thrones")) return true;
     if (originalName.toLowerCase().includes("demon slayer") && (serverClean.includes("thanh guom diet quy") || serverClean.includes("kimetsu"))) return true;
-    
-    // Check Absolute Anime Names
-    const absKeys = Object.keys(ABSOLUTE_ANIME_MAP);
-    for (const key of absKeys) {
-        if (originalName.toLowerCase().includes(key) && serverClean.includes(key)) return true;
-    }
+    // MHA Check
+    if (originalName.toLowerCase().includes("my hero academia") && (serverClean.includes("hoc vien sieu anh hung") || serverClean.includes("boku no"))) return true;
 
-    // Year Check
     let yearMatch = false;
     if (!hasYear) yearMatch = true;
     else {
@@ -236,7 +201,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // Check Mapping
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
@@ -249,7 +213,6 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         }
     }
 
-    // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
         if (qClean.length <= 9) {
@@ -319,11 +282,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
     }
 
-    // [LOGIC 2] UNIFIED ABSOLUTE NUMBERING (AoT, MHA, Naruto, etc.)
-    let targetAbsoluteNumber = null;
-    if (season && episode) {
-        targetAbsoluteNumber = getAbsoluteTarget(originalName, season, episode);
-    }
+    // [LOGIC 2] ABSOLUTE ANIME ENGINE (AoT, MHA, Naruto Shippuden)
+    const targetAbsoluteNumber = getAbsoluteAnimeNumber(originalName, season, episode);
 
     const queries = [];
     let mappedVietnameseList = [];
@@ -345,10 +305,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v40): "${originalName}" (${year}) | S${season}E${episode} ===`);
-    if (targetAbsoluteNumber) console.log(`[Special] Absolute Mode Active. Target: #${targetAbsoluteNumber}`);
-    if (isDemonSlayer) console.log(`[Special] Demon Slayer Mode: S${season}`);
-    if (isRegularShow && season <= 2) console.log(`[Special] Regular Show Strict Guard: S${season}`);
+    console.log(`\n=== Xử lý (v40): "${originalName}" (${year}) | Type: ${type} ===`);
+    
+    if (targetAbsoluteNumber) console.log(`[Absolute Anime] Detect: S${season}E${episode} -> Absolute #${targetAbsoluteNumber}`);
+    else if (isDemonSlayer) console.log(`[Special] Demon Slayer Logic: Season ${season}`);
+    else if (isRegularShow && season <= 2) console.log(`[Special] Regular Show Strict Guard: Season ${season}`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -462,27 +423,28 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
                 let matchedVideos = metaRes.data.meta.videos;
 
-                // --- (v40) RAM PRE-FILTER (OPTIMIZED) ---
+                // --- (v40) RAM PRE-FILTER ---
                 
                 if (useSmartRegex && targetEpisodeTitle) {
                     const titleRegex = createSmartRegex(targetEpisodeTitle);
-                    if (titleRegex) matchedVideos = matchedVideos.filter(vid => titleRegex.test(vid.title || vid.name || ""));
+                    if (titleRegex) {
+                        matchedVideos = matchedVideos.filter(vid => titleRegex.test(vid.title || vid.name || ""));
+                    }
                 } 
                 else if (targetAbsoluteNumber) {
-                    // [UNIFIED LOGIC] AoT, MHA, Naruto
+                    // [ABSOLUTE ANIME ENGINE]
                     matchedVideos = matchedVideos.filter(vid => {
                         const vidName = vid.title || vid.name || "";
                         const info = extractEpisodeInfo(vidName);
-                        // Nếu tìm thấy số tập trong tên file == target -> Lấy
+                        // Check 1: Extract chuẩn
                         if (info && info.e === targetAbsoluteNumber) return true;
-                        // Backup check: Tìm chuỗi số target bị cô lập
-                        const regexAbs = new RegExp(`(?:^|\\s|e|ep|#)${targetAbsoluteNumber}(?:\\.|\\s|$)`, 'i');
-                        if (regexAbs.test(vidName)) return true;
+                        // Check 2: Text raw (phòng trường hợp "Tập 459" không chuẩn format)
+                        if (vidName.includes(` ${targetAbsoluteNumber} `) || vidName.includes(`E${targetAbsoluteNumber}`)) return true;
                         return false;
                     });
                 }
                 else if (isDemonSlayer) {
-                    // Demon Slayer Logic (Separate due to complex arcs)
+                    // Demon Slayer Logic (S1 & S5)
                     if (season === 1) {
                         matchedVideos = matchedVideos.filter(vid => {
                             const name = (vid.title || vid.name || "").toLowerCase();
@@ -508,13 +470,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     }
                 }
                 else {
-                    // STANDARD LOGIC
+                    // Standard Logic (Regular Show S1/S2, GoT, etc.)
                     matchedVideos = matchedVideos.filter(vid => {
                         const vidName = vid.title || vid.name || "";
                         const info = extractEpisodeInfo(vidName);
                         if (!info) return false;
                         
-                        // Regular Show Strict Guard
                         if (isRegularShow && season <= 2) {
                             const strictSeasonRegex = new RegExp(`(?:s|season)\\s?0?${season}|${season}x`, 'i');
                             if (!strictSeasonRegex.test(vidName)) return false;
@@ -541,14 +502,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 if (titleRegex && !titleRegex.test(streamTitle)) return;
                             } 
                             else if (targetAbsoluteNumber) {
-                                // Final gatekeeper for AoT/MHA/Naruto
+                                // [ABSOLUTE ANIME ENGINE] Final Check
                                 const info = extractEpisodeInfo(streamTitle);
-                                if (info && info.e === targetAbsoluteNumber) { /* OK */ }
-                                else {
-                                    // Fallback strict regex check if extract failed
-                                    const regexAbs = new RegExp(`(?:^|\\s|e|ep|#)${targetAbsoluteNumber}(?:\\.|\\s|$)`, 'i');
-                                    if (!regexAbs.test(streamTitle)) return;
-                                }
+                                // Nếu extract được số -> Phải đúng số tuyệt đối
+                                if (info && info.e !== targetAbsoluteNumber) return; 
+                                // Nếu không extract được -> Phải chứa số tuyệt đối (weak check)
+                                if (!info && !streamTitle.includes(`${targetAbsoluteNumber}`)) return;
                             }
                             else if (isDemonSlayer) {
                                 const sName = streamTitle.toLowerCase();
@@ -568,7 +527,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 }
                             }
                             else {
-                                // STANDARD
+                                // STANDARD LOGIC
                                 const streamInfo = extractEpisodeInfo(streamTitle);
                                 if (!streamInfo) return; 
                                 
