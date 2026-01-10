@@ -18,8 +18,8 @@ const HEADERS = {
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v40",
     version: "40.0.0",
-    name: "Phim4K VIP (Anime Absolute Fix)",
-    description: "Fixed Absolute Numbering for AoT, MHA, Naruto Shippuden. Strict Guard included.",
+    name: "Phim4K VIP (Anime Absolute Master)",
+    description: "Fixed MHA, Naruto Shippuden Absolute Numbering, Demon Slayer, AoT & RegShow Strict",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -28,13 +28,13 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING (CẬP NHẬT MỚI) ===
 const VIETNAMESE_MAPPING = {
-    // --- SPECIAL CASES ---
+    // --- ANIME SPECIALS ---
     "tom and jerry": ["tom and jerry the golden era anthology", "tom and jerry 1990"],
     "demon slayer: kimetsu no yaiba": ["thanh gươm diệt quỷ", "kimetsu no yaiba"],
     
-    // [NEW] ANIME MAPPING
-    "my hero academia": ["học viện anh hùng", "boku no hero academia"],
-    "naruto: shippuden": ["naruto shippuden", "naruto phần 2", "naruto 2"],
+    // [NEW] NARUTO & MHA
+    "naruto shippuden": ["naruto shippuden (2007) naruto shippūden"],
+    "my hero academia": ["học viện siêu anh hùng", "boku no hero academia"],
 
     // GAME OF THRONES
     "game of thrones": [
@@ -122,61 +122,55 @@ function getHPKeywords(originalName) {
     return null;
 }
 
-// [CALCULATOR] Attack on Titan
+// [NEW] CALCULATOR CHO TỪNG ANIME
 function getAoTAbsoluteNumber(season, episode) {
-    if (season === 1) return null; 
+    if (season === 1) return null; // S1 dùng standard
     if (season === 2) return 25 + episode;
     if (season === 3) return 37 + episode;
     if (season === 4) return 59 + episode;
     return null;
 }
 
-// [CALCULATOR] My Hero Academia
-function getMHAAbsoluteNumber(season, episode) {
-    if (season === 1) return null; // S1 dùng chuẩn
-    if (season === 2) return 14 + episode; // S2E1 -> 15
-    if (season === 3) return 40 + episode; // S3E1 -> 41
-    if (season === 4) return 65 + episode; // S4E1 -> 66
-    if (season === 5) return 92 + episode; // S5E1 -> 93
-    if (season === 6) return 119 + episode; // S6E1 -> 120
-    if (season === 7) return 149 + episode; // S7E1 -> 150
+function getMhaAbsoluteNumber(season, episode) {
+    if (season === 1) return episode; // S1 usually 1-13
+    if (season === 2) return 14 + episode; // S2E1 = 15
+    if (season === 3) return 40 + episode; // S3E1 = 41
+    if (season === 4) return 65 + episode; // S4E1 = 66
+    if (season === 5) return 92 + episode; // S5E1 = 93
+    if (season === 6) return 119 + episode; // S6E1 = 120
+    if (season === 7) return 149 + episode; // S7E1 = 150
     return null;
 }
 
-// [CALCULATOR] Naruto Shippuden (Based on Wiki cumulative counts)
 function getNarutoShippudenAbsoluteNumber(season, episode) {
-    if (season === 1) return null; // S1 chuẩn 1-32
+    // S1 (1-32)
+    if (season === 1) return episode; 
     
-    // Mảng chứa số tập tích lũy trước khi bắt đầu season mới
-    // S1=32, S2=21, S3=18, S4=17, S5=24, S6=31, S7=8, S8=24, S9=21, S10=25...
-    const cumulativeOffsets = [
-        0,   // S1 start (Offset 0)
-        32,  // S2 start (32 eps trước đó) -> S2E1 = 33
-        53,  // S3 start (32+21) -> S3E1 = 54
-        71,  // S4 start
-        88,  // S5 start
-        112, // S6 start
-        143, // S7 start
-        151, // S8 start
-        175, // S9 start
-        196, // S10 start
-        221, // S11 start
-        242, // S12 start
-        275, // S13 start
-        295, // S14 start
-        315, // S15 start
-        348, // S16 start
-        361, // S17 start
-        372, // S18 start
-        395, // S19 start
-        416, // S20 start
-        437, // S21 start
-        458, // S22 (mixed)
-        479  // End phases
-    ];
-
-    if (season > cumulativeOffsets.length) return null;
-    return cumulativeOffsets[season - 1] + episode;
+    // Offset mapping logic based on continuous episode count
+    const offsets = {
+        2: 32,   // S2E1 = 33
+        3: 53,   // S3E1 = 54
+        4: 71,   // S4E1 = 72
+        5: 88,   // S5E1 = 89
+        6: 112,  // S6E1 = 113
+        7: 143,  // S7E1 = 144
+        8: 151,  // S8E1 = 152
+        9: 175,  // S9E1 = 176
+        10: 196, // S10E1 = 197
+        11: 221, // S11E1 = 222
+        12: 242, // S12E1 = 243
+        13: 275, // S13E1 = 276
+        14: 295, // S14E1 = 296
+        15: 320, // S15E1 = 321
+        16: 348, // S16E1 = 349
+        17: 361, // S17E1 = 362
+        18: 372, // S18E1 = 373
+        19: 393, // S19E1 = 394
+        20: 413, // S20E1 = 414
+        21: 479  // S21E1 = 480
+    };
+    if (offsets[season]) return offsets[season] + episode;
+    return null;
 }
 
 function normalizeForSearch(title) {
@@ -219,8 +213,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (originalName.toLowerCase().includes("regular show") && serverClean.includes("regular show")) return true;
     if (originalName.toLowerCase().includes("game of thrones") && serverClean.includes("game of thrones")) return true;
     if (originalName.toLowerCase().includes("demon slayer") && (serverClean.includes("thanh guom diet quy") || serverClean.includes("kimetsu"))) return true;
-    if (originalName.toLowerCase().includes("my hero academia") && serverClean.includes("hoc vien anh hung")) return true;
-    if (originalName.toLowerCase().includes("naruto: shippuden") && (serverClean.includes("naruto shippuden") || serverClean.includes("naruto 2"))) return true;
+    if (originalName.toLowerCase().includes("naruto") && serverClean.includes("naruto")) return true;
 
     // Year Check
     let yearMatch = false;
@@ -228,10 +221,12 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     else {
         const yearMatches = serverName.match(/\d{4}/g);
         if (yearMatches) {
-            const tolerance = (type === 'series' || originalName.toLowerCase().includes('naruto')) ? 5 : 1; // Tăng tolerance cho Naruto
+            const tolerance = (type === 'series' || originalName.toLowerCase().includes('naruto')) ? 2 : 1;
             yearMatch = yearMatches.some(y => Math.abs(parseInt(y) - year) <= tolerance);
         } else if (candidate.releaseInfo) {
-            yearMatch = candidate.releaseInfo.includes(year.toString());
+            yearMatch = candidate.releaseInfo.includes(year.toString()) 
+                     || candidate.releaseInfo.includes((year-1).toString()) 
+                     || candidate.releaseInfo.includes((year+1).toString());
         } else yearMatch = true;
     }
     if (serverClean.includes("harry potter colection")) yearMatch = true;
@@ -307,12 +302,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const isTomAndJerry = lowerOrig.includes("tom and jerry");
     const isRegularShow = lowerOrig.includes("regular show");
     const isAoT = lowerOrig.includes("attack on titan");
-    const isMHA = lowerOrig.includes("my hero academia");
-    const isNarutoShippuden = lowerOrig.includes("naruto: shippuden");
     const isDemonSlayer = lowerOrig.includes("demon slayer") || lowerOrig.includes("kimetsu no yaiba");
+    const isMha = lowerOrig.includes("my hero academia") || lowerOrig.includes("boku no hero academia");
+    const isNarutoShippuden = lowerOrig.includes("naruto shippuden");
     const isOppenheimer = lowerOrig === "oppenheimer";
 
-    // [LOGIC 1] Smart Regex
+    // [LOGIC 1] Smart Regex (T&J All, Regular Show S3+)
     let useSmartRegex = false;
     let targetEpisodeTitle = null;
 
@@ -324,11 +319,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
     }
 
-    // [LOGIC 2] Absolute Numbering (AoT / MHA / Naruto)
+    // [LOGIC 2] ABSOLUTE NUMBERING CALCULATOR
     let targetAbsoluteNumber = null;
     if (season) {
         if (isAoT) targetAbsoluteNumber = getAoTAbsoluteNumber(season, episode);
-        else if (isMHA) targetAbsoluteNumber = getMHAAbsoluteNumber(season, episode);
+        else if (isMha) targetAbsoluteNumber = getMhaAbsoluteNumber(season, episode);
         else if (isNarutoShippuden) targetAbsoluteNumber = getNarutoShippudenAbsoluteNumber(season, episode);
     }
 
@@ -353,8 +348,9 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const uniqueQueries = [...new Set(queries)];
     console.log(`\n=== Xử lý (v40): "${originalName}" (${year}) | Type: ${type} ===`);
+    if (targetAbsoluteNumber) console.log(`[Special] Absolute Mode Detected: S${season}E${episode} -> Episode #${targetAbsoluteNumber}`);
     if (isDemonSlayer) console.log(`[Special] Demon Slayer Logic: Season ${season}`);
-    if (targetAbsoluteNumber) console.log(`[Special] Absolute Mode Active. Target Episode: #${targetAbsoluteNumber} (Mapped from S${season}E${episode})`);
+    if (isRegularShow && season <= 2) console.log(`[Special] Regular Show Strict Guard: Season ${season}`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -398,6 +394,24 @@ builder.defineStreamHandler(async ({ type, id }) => {
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
     }
 
+    if (cleanName.length <= 9 && matchedCandidates.length > 0 && !useSmartRegex) {
+        matchedCandidates = matchedCandidates.filter(m => {
+            const mClean = normalizeForSearch(m.name);
+            const qClean = normalizeForSearch(originalName);
+            if (mappedVietnameseList.length > 0) {
+                const matchesMap = mappedVietnameseList.some(map => {
+                    const mapClean = normalizeForSearch(map);
+                    return mClean.includes(mapClean);
+                });
+                if (matchesMap) return true;
+            }
+            const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
+            const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
+            const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
+            return endsWithExact || isExact || startsWithExact;
+        });
+    }
+
     if (matchedCandidates.length === 0) return { streams: [] };
     console.log(`-> KẾT QUẢ CUỐI CÙNG:`);
     matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
@@ -416,7 +430,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     let streams = sRes.data.streams;
                     if (useSmartRegex && targetEpisodeTitle) {
                         const titleRegex = createSmartRegex(targetEpisodeTitle);
-                        if (titleRegex) streams = streams.filter(s => titleRegex.test(s.title || s.name || ""));
+                        if (titleRegex) {
+                            streams = streams.filter(s => {
+                                const sName = s.title || s.name || "";
+                                return titleRegex.test(sName);
+                            });
+                        }
                     } 
                     else if (isHarryPotter && hpKeywords) {
                         streams = streams.filter(s => {
@@ -449,24 +468,21 @@ builder.defineStreamHandler(async ({ type, id }) => {
                 
                 if (useSmartRegex && targetEpisodeTitle) {
                     const titleRegex = createSmartRegex(targetEpisodeTitle);
-                    if (titleRegex) matchedVideos = matchedVideos.filter(vid => titleRegex.test(vid.title || vid.name || ""));
+                    if (titleRegex) {
+                        matchedVideos = matchedVideos.filter(vid => titleRegex.test(vid.title || vid.name || ""));
+                    }
                 } 
                 else if (targetAbsoluteNumber) {
-                    // [ABSOLUTE NUMBERING FILTER] (AoT, MHA, Naruto)
+                    // Logic chung cho AoT S2+, MHA, Naruto Shippuden
                     matchedVideos = matchedVideos.filter(vid => {
                         const vidName = vid.title || vid.name || "";
                         const info = extractEpisodeInfo(vidName);
-                        // Case 1: Detect ra S/E nhưng E trùng với Absolute (VD: S02E15 ở MHA)
                         if (info && info.e === targetAbsoluteNumber) return true;
-                        // Case 2: Chỉ detect ra số (S=0)
-                        if (info && info.s === 0 && info.e === targetAbsoluteNumber) return true;
-                        // Case 3: Chứa số trần
                         if (vidName.includes(` ${targetAbsoluteNumber} `) || vidName.includes(`E${targetAbsoluteNumber}`)) return true;
                         return false;
                     });
                 }
                 else if (isDemonSlayer) {
-                    // Demon Slayer Logic (Keep v39)
                     if (season === 1) {
                         matchedVideos = matchedVideos.filter(vid => {
                             const name = (vid.title || vid.name || "").toLowerCase();
@@ -474,14 +490,16 @@ builder.defineStreamHandler(async ({ type, id }) => {
                             const epRegex = new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`);
                             return epRegex.test(name);
                         });
-                    } else if (season === 5) {
+                    } 
+                    else if (season === 5) {
                         matchedVideos = matchedVideos.filter(vid => {
                             const name = (vid.title || vid.name || "").toLowerCase();
                             if (!name.includes("hashira") && !name.includes("geiko")) return false;
                             const epRegex = new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`);
                             return epRegex.test(name);
                         });
-                    } else {
+                    }
+                    else {
                         matchedVideos = matchedVideos.filter(vid => {
                             const info = extractEpisodeInfo(vid.title || vid.name || "");
                             if (!info) return false;
@@ -495,10 +513,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         const vidName = vid.title || vid.name || "";
                         const info = extractEpisodeInfo(vidName);
                         if (!info) return false;
+                        
                         if (isRegularShow && season <= 2) {
                             const strictSeasonRegex = new RegExp(`(?:s|season)\\s?0?${season}|${season}x`, 'i');
                             if (!strictSeasonRegex.test(vidName)) return false;
                         }
+
                         if (info.s === 0) return season === 1 && info.e === episode; 
                         return info.s === season && info.e === episode;
                     });
@@ -520,7 +540,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 if (titleRegex && !titleRegex.test(streamTitle)) return;
                             } 
                             else if (targetAbsoluteNumber) {
-                                // Absolute Logic Final Check
+                                // Chung cho AoT, MHA, Naruto
                                 const info = extractEpisodeInfo(streamTitle);
                                 if (info && info.e !== targetAbsoluteNumber) return; 
                                 if (!info && !streamTitle.includes(`${targetAbsoluteNumber}`)) return;
@@ -543,13 +563,14 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 }
                             }
                             else {
-                                // Standard Logic Final Check
                                 const streamInfo = extractEpisodeInfo(streamTitle);
                                 if (!streamInfo) return; 
+                                
                                 if (isRegularShow && season <= 2) {
                                     const strictSeasonRegex = new RegExp(`(?:s|season)\\s?0?${season}|${season}x`, 'i');
                                     if (!strictSeasonRegex.test(streamTitle)) return;
                                 }
+
                                 if (streamInfo.s === 0) { 
                                     if (season !== 1) return;
                                     if (streamInfo.e !== episode) return;
