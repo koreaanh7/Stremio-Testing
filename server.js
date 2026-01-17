@@ -1,20 +1,3 @@
-Chào bạn, đây là một yêu cầu nâng cao rất thú vị. Chúng ta đang chuyển từ việc xử lý "Case-by-case" (từng trường hợp lẻ tẻ) sang xây dựng một **"Hệ thống định tuyến tập phim tuyệt đối" (Universal Absolute Numbering System)**.
-
-Với **My Hero Academia (MHA)** và **Naruto Shippuden**, số lượng season và độ lệch (offset) quá nhiều để code thủ công `if/else`. Tôi đã nâng cấp kiến trúc để sử dụng một bảng `OFFSETS` trung tâm.
-
-Đây là giải pháp cho v40:
-
-1. **My Hero Academia:** Đã tính toán offset chính xác cho Season 2 -> 8.
-2. **Naruto Shippuden:** Đã nhập toàn bộ offset cho Season 2 -> 22.
-* *Lưu ý:* Về yêu cầu Season 22 bắt đầu là `S20E459`: Hệ thống Absolute Numbering của tôi ưu tiên số tập (`459`). Do đó, dù file có tên là `S20E459`, hệ thống vẫn sẽ chấp nhận vì `E459` khớp với tính toán, bỏ qua việc season bị lệch (S20 vs S22).
-
-
-
-Đây là **Phiên bản v40 (Universal Absolute System)**.
-
-### CẬP NHẬT `server.js` (Phiên bản v40)
-
-```javascript
 const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require("axios");
 
@@ -631,5 +614,3 @@ async function getCinemetaMetadata(type, imdbId) {
 
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port: port });
-
-```
