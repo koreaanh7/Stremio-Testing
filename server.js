@@ -29,9 +29,7 @@ const builder = new addonBuilder({
 
 // === 1. TỪ ĐIỂN MAPPING (RÚT GỌN - CHỈ GIỮ CA KHÓ/ĐẶC BIỆT) ===
 const VIETNAMESE_MAPPING = {
-    // --- SPECIAL LOGIC CASES (Anime/Collections) ---
-    "tom and jerry": ["tom and jerry the golden era anthology", "tom and jerry 1990"],
-    // --- CONFLICT & PRIORITY RESOLUTION (Tên file trùng/ưu tiên tên Việt) ---
+
     // --- HARRY POTTER COLLECTION (Giữ nguyên vì server gộp) ---
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
@@ -593,6 +591,7 @@ async function getCinemetaMetadata(type, imdbId) {
 
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port: port });
+
 
 
 
