@@ -41,12 +41,7 @@ const VIETNAMESE_MAPPING = {
     "flow": ["lạc trôi", "straume"], // "Flow" là từ quá chung
     "boss": ["đại ca ha ha ha"], // Tên lóng server đặt
 
-    // --- SHORT TITLE / COMMON WORD ISOLATION (Tên quá ngắn dễ bắt nhầm) ---
-    "from": ["bẫy"], // Từ khóa "From" xuất hiện khắp nơi
-    "it": ["gã hề ma quái"], // "It" quá ngắn
-    "up": ["vút bay"], // "Up" quá ngắn
-    "9": ["chiến binh số 9", "9"], // Số 9 quá chung
-    "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"],
+
 
     // --- SERVER FIXES (Lỗi đặt tên của Server) ---
     "taxi driver": ["tài xế ẩn danh", "taxi driver"], // Fix lộn season
@@ -612,4 +607,5 @@ async function getCinemetaMetadata(type, imdbId) {
 
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port: port });
+
 
