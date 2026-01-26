@@ -31,21 +31,10 @@ const builder = new addonBuilder({
 const VIETNAMESE_MAPPING = {
     // --- SPECIAL LOGIC CASES (Anime/Collections) ---
     "tom and jerry": ["tom and jerry the golden era anthology", "tom and jerry 1990"],
-    "my hero academia": ["học viện siêu anh hùng", "boku no hero academia"],
-    "demon slayer: kimetsu no yaiba": ["thanh gươm diệt quỷ", "kimetsu no yaiba"],
-    "naruto: shippuden": ["naruto shippuden", "naruto phần 2"],
-    "naruto shippuden": ["naruto shippuden", "naruto phần 2"],
-
     // --- CONFLICT & PRIORITY RESOLUTION (Tên file trùng/ưu tiên tên Việt) ---
     "shadow": ["vô ảnh"], // Tránh nhầm với phim "Shadow" tiếng Anh khác
     "flow": ["lạc trôi", "straume"], // "Flow" là từ quá chung
     "boss": ["đại ca ha ha ha"], // Tên lóng server đặt
-
-
-
-    // --- SERVER FIXES (Lỗi đặt tên của Server) ---
-    "taxi driver": ["tài xế ẩn danh", "taxi driver"], // Fix lộn season
-    
     // --- HARRY POTTER COLLECTION (Giữ nguyên vì server gộp) ---
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
@@ -607,5 +596,6 @@ async function getCinemetaMetadata(type, imdbId) {
 
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port: port });
+
 
 
