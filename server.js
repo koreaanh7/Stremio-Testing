@@ -31,7 +31,6 @@ const builder = new addonBuilder({
 const VIETNAMESE_MAPPING = {
     // --- SPECIAL LOGIC CASES (Anime/Collections) ---
     "tom and jerry": ["tom and jerry the golden era anthology", "tom and jerry 1990"],
-    "game of thrones": ["trò chơi vương quyền (2011) game of thrones"],
     "my hero academia": ["học viện siêu anh hùng", "boku no hero academia"],
     "demon slayer: kimetsu no yaiba": ["thanh gươm diệt quỷ", "kimetsu no yaiba"],
     "naruto: shippuden": ["naruto shippuden", "naruto phần 2"],
@@ -41,21 +40,17 @@ const VIETNAMESE_MAPPING = {
     "shadow": ["vô ảnh"], // Tránh nhầm với phim "Shadow" tiếng Anh khác
     "flow": ["lạc trôi", "straume"], // "Flow" là từ quá chung
     "boss": ["đại ca ha ha ha"], // Tên lóng server đặt
-    "oppenheimer": ["oppenheimer 2023"], // Tránh phim tài liệu
 
     // --- SHORT TITLE / COMMON WORD ISOLATION (Tên quá ngắn dễ bắt nhầm) ---
     "from": ["bẫy"], // Từ khóa "From" xuất hiện khắp nơi
     "it": ["gã hề ma quái"], // "It" quá ngắn
     "up": ["vút bay"], // "Up" quá ngắn
     "9": ["chiến binh số 9", "9"], // Số 9 quá chung
-    "brother": ["brother", "lão đại", "người anh em"], // Tránh "O Brother..."
     "o brother, where art thou?": ["3 kẻ trốn tù", "ba kẻ trốn tù"],
 
     // --- SERVER FIXES (Lỗi đặt tên của Server) ---
     "taxi driver": ["tài xế ẩn danh", "taxi driver"], // Fix lộn season
-    "the neverending story": ["câu chuyện bất tận"], // Server thiếu tên tiếng Anh
-    "dexter: original sin": ["dexter original sin", "dexter trọng tội", "dexter sát thủ"], // Fix subtitle check
-
+    
     // --- HARRY POTTER COLLECTION (Giữ nguyên vì server gộp) ---
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
@@ -617,3 +612,4 @@ async function getCinemetaMetadata(type, imdbId) {
 
 const port = process.env.PORT || 7000;
 serveHTTP(builder.getInterface(), { port: port });
+
