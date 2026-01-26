@@ -20,19 +20,16 @@ const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v42",
     version: "42.0.0",
     name: "Phim4K VIP (Pure TMDB)",
-    description: "TMDB Metadata + Naruto/MHA Absolute Numbering",
+    description: "TMDB Auto-Map + Absolute Numbering (Naruto/MHA) + Clean Logic",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MAPPING (TỐI GIẢN) ===
-// Chỉ giữ lại những ca đặc biệt mà TMDB không thể xử lý do cấu trúc file server
+// === 1. TỪ ĐIỂN MAPPING (ĐÃ RÚT GỌN TỐI ĐA) ===
 const VIETNAMESE_MAPPING = {
-    // Tên file server có năm, search oppenheimer không ra
     "oppenheimer": ["oppenheimer 2023"],
-
     // --- HARRY POTTER COLLECTION (Giữ nguyên vì server gộp) ---
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
@@ -50,7 +47,7 @@ async function getTmdbVietnameseTitle(imdbId, type) {
     if (!TMDB_TOKEN) return null;
     try {
         const url = `https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_TOKEN}&external_source=imdb_id&language=vi-VN`;
-        const res = await axios.get(url, { timeout: 3000 });
+        const res = await axios.get(url, { timeout: 3000 }); 
 
         if (!res.data) return null;
 
@@ -211,7 +208,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // Check Mapping (Manual + TMDB)
+    // Check Mapping
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
@@ -234,6 +231,14 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
             if (serverClean.includes(qClean)) return true;
         }
     }
+    return false;
+}
+
+function checkExactYear(candidate, targetYear) {
+    const serverName = candidate.name;
+    const yearMatches = serverName.match(/\d{4}/g);
+    if (yearMatches) return yearMatches.some(y => parseInt(y) === targetYear);
+    if (candidate.releaseInfo) return candidate.releaseInfo.includes(targetYear.toString());
     return false;
 }
 
@@ -273,7 +278,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const isTomAndJerry = lowerOrig.includes("tom and jerry");
     const isRegularShow = lowerOrig.includes("regular show");
     const isDemonSlayer = lowerOrig.includes("demon slayer") || lowerOrig.includes("kimetsu no yaiba");
-
+    
     // [LOGIC 1] Smart Regex
     let useSmartRegex = false;
     let targetEpisodeTitle = null;
@@ -299,11 +304,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (mappingRaw) mappedVietnameseList = Array.isArray(mappingRaw) ? mappingRaw : [mappingRaw];
     mappedVietnameseList.forEach(name => queries.push(name));
 
-    // --- STEP 2: LOAD TMDB MAPPING (Priority) ---
+    // --- STEP 2: LOAD TMDB MAPPING ---
     const tmdbVietnamese = await getTmdbVietnameseTitle(imdbId, type);
     if (tmdbVietnamese) {
         queries.push(tmdbVietnamese);
-        mappedVietnameseList.push(tmdbVietnamese);
+        mappedVietnameseList.push(tmdbVietnamese); 
     }
 
     // --- STEP 3: LOAD STANDARD QUERIES ---
@@ -324,6 +329,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     console.log(`\n=== Xử lý (v42): "${originalName}" (${year}) | Type: ${type} ===`);
     console.log(`[Queries] ${uniqueQueries.join(" | ")}`);
     if (targetAbsoluteNumber) console.log(`[Special] Absolute Mode Active. S${season}E${episode} -> #${targetAbsoluteNumber}`);
+    if (isDemonSlayer) console.log(`[Special] Demon Slayer Logic: Season ${season}`);
 
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
@@ -353,8 +359,40 @@ builder.defineStreamHandler(async ({ type, id }) => {
         if (strictVietnameseMatches.length > 0) matchedCandidates = strictVietnameseMatches; 
     }
 
-    // --- ĐÃ XÓA KHỐI CODE "GOLDEN MATCH" VÀ "EXACT MATCH" THEO YÊU CẦU ---
-    // Bây giờ addon sẽ chấp nhận mọi kết quả đã qua vòng lọc isMatch (bao gồm cả tìm theo tên tiếng Việt)
+    // [MODIFIED] Removed Game of Thrones Exception
+    if (matchedCandidates.length > 1 && !isHarryPotter && !useSmartRegex && !targetAbsoluteNumber && !isDemonSlayer) {
+        const oClean = normalizeForSearch(originalName);
+        const goldenMatches = matchedCandidates.filter(m => {
+            let mClean = normalizeForSearch(m.name);
+            mClean = mClean.replace(year.toString(), "").trim();
+            return mClean === oClean;
+        });
+        if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) { }
+    }
+    
+    // [MODIFIED] Removed Game of Thrones Exception
+    if (hasYear && matchedCandidates.length > 1 && !isHarryPotter && !useSmartRegex && !targetAbsoluteNumber && !isDemonSlayer) {
+        const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
+        if (exactMatches.length > 0) matchedCandidates = exactMatches;
+    }
+
+    if (cleanName.length <= 9 && matchedCandidates.length > 0 && !useSmartRegex) {
+        matchedCandidates = matchedCandidates.filter(m => {
+            const mClean = normalizeForSearch(m.name);
+            const qClean = normalizeForSearch(originalName);
+            if (mappedVietnameseList.length > 0) {
+                const matchesMap = mappedVietnameseList.some(map => {
+                    const mapClean = normalizeForSearch(map);
+                    return mClean.includes(mapClean);
+                });
+                if (matchesMap) return true;
+            }
+            const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
+            const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
+            const startsWithExact = new RegExp(`^${qClean}[\\s]`, 'i').test(mClean);
+            return endsWithExact || isExact || startsWithExact;
+        });
+    }
 
     if (matchedCandidates.length === 0) return { streams: [] };
     console.log(`-> KẾT QUẢ CUỐI CÙNG:`);
@@ -408,7 +446,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
                 let matchedVideos = metaRes.data.meta.videos;
 
-                // --- RAM PRE-FILTER ---
                 if (useSmartRegex && targetEpisodeTitle) {
                     const titleRegex = createSmartRegex(targetEpisodeTitle);
                     if (titleRegex) matchedVideos = matchedVideos.filter(vid => titleRegex.test(vid.title || vid.name || ""));
@@ -471,7 +508,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
                             
-                            // --- FINAL STRICT FILTER ---
                             if (useSmartRegex && targetEpisodeTitle) {
                                 const titleRegex = createSmartRegex(targetEpisodeTitle);
                                 if (titleRegex && !titleRegex.test(streamTitle)) return;
