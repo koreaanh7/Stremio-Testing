@@ -2,7 +2,7 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require("axios");
 
 const TARGET_MANIFEST_URL = process.env.TARGET_MANIFEST_URL;
-const TMDB_TOKEN = process.env.TMDB_ACCESS_TOKEN; // API KEY (v3)
+const TMDB_TOKEN = process.env.TMDB_ACCESS_TOKEN; 
 
 if (!TARGET_MANIFEST_URL) {
     console.error("LỖI: Chưa set TARGET_MANIFEST_URL");
@@ -16,21 +16,24 @@ const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 };
 
+// === IN-MEMORY CACHE (Bí mật tốc độ của Webstreamr) ===
+// Lưu trữ: { "tt123456": "Tên Tiếng Việt" }
+const TMDB_CACHE = {}; 
+
 const builder = new addonBuilder({
-    id: "com.phim4k.vip.final.v42",
-    version: "42.0.0",
-    name: "Phim4K VIP (Pure TMDB)",
-    description: "TMDB Auto-Map + Absolute Numbering (Naruto/MHA) + Clean Logic",
+    id: "com.phim4k.vip.final.v43",
+    version: "43.0.0",
+    name: "Phim4K VIP (Speed Optimized)",
+    description: "Cached TMDB + Parallel Requests + Absolute Numbering",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
     catalogs: []
 });
 
-// === 1. TỪ ĐIỂN MAPPING (ĐÃ RÚT GỌN TỐI ĐA) ===
+// === 1. TỪ ĐIỂN MAPPING (Clean) ===
 const VIETNAMESE_MAPPING = {
     "oppenheimer": ["oppenheimer 2023"],
-    // --- HARRY POTTER COLLECTION (Giữ nguyên vì server gộp) ---
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
     "harry potter and the chamber of secrets": ["harry potter colection"],
@@ -42,12 +45,19 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 };
 
-// === TMDB HELPER ===
+// === TMDB HELPER (WITH CACHING) ===
 async function getTmdbVietnameseTitle(imdbId, type) {
     if (!TMDB_TOKEN) return null;
+
+    // 1. Kiểm tra Cache trước (Tốc độ ánh sáng)
+    if (TMDB_CACHE[imdbId]) {
+        console.log(`[Cache Hit] TMDB for ${imdbId}: "${TMDB_CACHE[imdbId]}"`);
+        return TMDB_CACHE[imdbId];
+    }
+
     try {
         const url = `https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_TOKEN}&external_source=imdb_id&language=vi-VN`;
-        const res = await axios.get(url, { timeout: 3000 }); 
+        const res = await axios.get(url, { timeout: 2000 }); // Giảm timeout xuống 2s để ko bị treo lâu
 
         if (!res.data) return null;
 
@@ -61,13 +71,18 @@ async function getTmdbVietnameseTitle(imdbId, type) {
             const originalTitle = type === 'movie' ? item.original_title : item.original_name;
             
             if (viTitle && viTitle.toLowerCase() !== originalTitle.toLowerCase()) {
-                console.log(`[TMDB] Found Vietnamese title for ${imdbId}: "${viTitle}"`);
+                // 2. Lưu vào Cache
+                TMDB_CACHE[imdbId] = viTitle;
+                console.log(`[TMDB API] Fetched & Cached for ${imdbId}: "${viTitle}"`);
                 return viTitle;
             }
         }
     } catch (e) {
-        console.error(`[TMDB Error] Could not fetch for ${imdbId}: ${e.message}`);
+        console.error(`[TMDB Error] ${imdbId}: ${e.message}`);
     }
+    
+    // Nếu không tìm thấy hoặc lỗi, lưu null vào cache để lần sau đỡ hỏi lại (Cache tiêu cực)
+    TMDB_CACHE[imdbId] = null; 
     return null;
 }
 
@@ -85,7 +100,7 @@ function getHPKeywords(originalName) {
     return null;
 }
 
-// === CALCULATOR: ABSOLUTE NUMBERING LOGIC ===
+// === CALCULATOR ===
 function getMHAOffset(season) {
     switch (season) {
         case 2: return 14;
@@ -101,53 +116,31 @@ function getMHAOffset(season) {
 
 function getNarutoShippudenOffset(season) {
     switch (season) {
-        case 2: return 32;
-        case 3: return 53;
-        case 4: return 71;
-        case 5: return 88;
-        case 6: return 112;
-        case 7: return 143;
-        case 8: return 151;
-        case 9: return 175;
-        case 10: return 196;
-        case 11: return 222;
-        case 12: return 242;
-        case 13: return 260;
-        case 14: return 295;
-        case 15: return 320;
-        case 16: return 348;
-        case 17: return 361;
-        case 18: return 393;
-        case 19: return 413;
-        case 20: return 431;
-        case 21: return 450;
-        case 22: return 458;
-        default: return 0;
+        case 2: return 32; case 3: return 53; case 4: return 71; case 5: return 88;
+        case 6: return 112; case 7: return 143; case 8: return 151; case 9: return 175;
+        case 10: return 196; case 11: return 222; case 12: return 242; case 13: return 260;
+        case 14: return 295; case 15: return 320; case 16: return 348; case 17: return 361;
+        case 18: return 393; case 19: return 413; case 20: return 431; case 21: return 450;
+        case 22: return 458; default: return 0;
     }
 }
 
 function getAbsoluteTarget(title, season, episode) {
     const lowerTitle = title.toLowerCase();
-    
     if (lowerTitle.includes("attack on titan")) {
         if (season === 1) return null;
         if (season === 2) return 25 + episode;
         if (season === 3) return 37 + episode;
         if (season === 4) return 59 + episode;
     }
-
     if (lowerTitle.includes("my hero academia") || lowerTitle.includes("boku no hero")) {
         if (season === 1) return null;
-        const offset = getMHAOffset(season);
-        return offset + episode;
+        return getMHAOffset(season) + episode;
     }
-
     if (lowerTitle.includes("naruto shippuden") || lowerTitle.includes("naruto: shippuden")) {
         if (season === 1) return null;
-        const offset = getNarutoShippudenOffset(season);
-        return offset + episode;
+        return getNarutoShippudenOffset(season) + episode;
     }
-
     return null;
 }
 
@@ -176,8 +169,7 @@ function createSmartRegex(episodeName) {
     cleanName = cleanName.trim();
     if (cleanName.length === 0) return null;
     const words = cleanName.split(/\s+/).map(w => w.replace(/[.*+^${}()|[\]\\]/g, '\\$&'));
-    const pattern = words.join("[\\W_]+");
-    return new RegExp(pattern, 'i');
+    return new RegExp(words.join("[\\W_]+"), 'i');
 }
 
 function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseList, queries) {
@@ -185,13 +177,11 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     const serverName = candidate.name;
     const serverClean = normalizeForSearch(serverName);
 
-    // Bypass check for Special Cases
     if (serverClean.includes("harry potter colection") && originalName.toLowerCase().includes("harry potter")) return true;
     if (originalName.toLowerCase().includes("tom and jerry") && serverClean.includes("tom and jerry")) return true;
     if (originalName.toLowerCase().includes("regular show") && serverClean.includes("regular show")) return true;
     if (originalName.toLowerCase().includes("demon slayer") && (serverClean.includes("thanh guom diet quy") || serverClean.includes("kimetsu"))) return true;
     
-    // Year Check
     let yearMatch = false;
     if (!hasYear) yearMatch = true;
     else {
@@ -208,25 +198,20 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
     if (serverClean.includes("harry potter colection")) yearMatch = true;
     if (!yearMatch) return false;
 
-    // Check Mapping
     if (mappedVietnameseList && mappedVietnameseList.length > 0) {
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
             if (mappedClean.length <= 3) {
-                const strictRegex = new RegExp(`(^|\\s|\\W)${mappedClean}($|\\s|\\W)`, 'i');
-                if (strictRegex.test(serverClean)) return true;
+                if (new RegExp(`(^|\\s|\\W)${mappedClean}($|\\s|\\W)`, 'i').test(serverClean)) return true;
             } else {
                 if (serverClean.includes(mappedClean)) return true;
             }
         }
     }
-
-    // Check Queries
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
         if (qClean.length <= 9) {
-            const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
-            if (strictRegex.test(serverClean)) return true;
+            if (new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i').test(serverClean)) return true;
         } else {
             if (serverClean.includes(qClean)) return true;
         }
@@ -235,8 +220,7 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
 }
 
 function checkExactYear(candidate, targetYear) {
-    const serverName = candidate.name;
-    const yearMatches = serverName.match(/\d{4}/g);
+    const yearMatches = candidate.name.match(/\d{4}/g);
     if (yearMatches) return yearMatches.some(y => parseInt(y) === targetYear);
     if (candidate.releaseInfo) return candidate.releaseInfo.includes(targetYear.toString());
     return false;
@@ -250,9 +234,7 @@ function passesSubtitleCheck(candidateName, originalName, queries) {
         if (parts.length >= 2) {
             const subtitle = normalizeForSearch(parts[1]);
             if (subtitle.length > 3) {
-                if (cleanOrig.includes("original sin") && !cleanCand.includes("original sin")) {
-                    return false; 
-                }
+                if (cleanOrig.includes("original sin") && !cleanCand.includes("original sin")) return false; 
             }
         }
     }
@@ -266,7 +248,17 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const season = seasonStr ? parseInt(seasonStr) : null;
     const episode = episodeStr ? parseInt(episodeStr) : null;
 
-    const meta = await getCinemetaMetadata(type, imdbId);
+    // === TỐI ƯU TỐC ĐỘ: CHẠY SONG SONG (PARALLEL) ===
+    // Thay vì chờ Cinemeta xong mới gọi TMDB, ta gọi cả hai cùng lúc!
+    
+    const metaPromise = getCinemetaMetadata(type, imdbId);
+    
+    // Chỉ gọi TMDB nếu có token, chạy song song với metaPromise
+    const tmdbPromise = TMDB_TOKEN ? getTmdbVietnameseTitle(imdbId, type) : Promise.resolve(null);
+
+    // Chờ cả 2 cùng hoàn thành (Thời gian = max(meta, tmdb))
+    const [meta, tmdbVietnamese] = await Promise.all([metaPromise, tmdbPromise]);
+
     if (!meta) return { streams: [] };
 
     const originalName = meta.name;
@@ -279,7 +271,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const isRegularShow = lowerOrig.includes("regular show");
     const isDemonSlayer = lowerOrig.includes("demon slayer") || lowerOrig.includes("kimetsu no yaiba");
     
-    // [LOGIC 1] Smart Regex
     let useSmartRegex = false;
     let targetEpisodeTitle = null;
     if (isTomAndJerry || (isRegularShow && season >= 3)) {
@@ -290,7 +281,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
     }
 
-    // [LOGIC 2] ABSOLUTE NUMBERING CALCULATOR
     let targetAbsoluteNumber = null;
     if (season && episode && type === 'series') {
         targetAbsoluteNumber = getAbsoluteTarget(originalName, season, episode);
@@ -298,20 +288,19 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
     const queries = [];
     
-    // --- STEP 1: LOAD MANUAL MAPPING (Minimal) ---
+    // Mapping thủ công
     let mappedVietnameseList = [];
     const mappingRaw = VIETNAMESE_MAPPING[lowerOrig];
     if (mappingRaw) mappedVietnameseList = Array.isArray(mappingRaw) ? mappingRaw : [mappingRaw];
     mappedVietnameseList.forEach(name => queries.push(name));
 
-    // --- STEP 2: LOAD TMDB MAPPING ---
-    const tmdbVietnamese = await getTmdbVietnameseTitle(imdbId, type);
+    // Mapping từ TMDB (Lấy từ kết quả chạy song song phía trên)
     if (tmdbVietnamese) {
         queries.push(tmdbVietnamese);
         mappedVietnameseList.push(tmdbVietnamese); 
     }
 
-    // --- STEP 3: LOAD STANDARD QUERIES ---
+    // Standard Queries
     queries.push(originalName);
     const cleanName = normalizeForSearch(originalName);
     if (cleanName !== lowerOrig) queries.push(cleanName);
@@ -326,15 +315,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
     if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
 
     const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v42): "${originalName}" (${year}) | Type: ${type} ===`);
-    console.log(`[Queries] ${uniqueQueries.join(" | ")}`);
-    if (targetAbsoluteNumber) console.log(`[Special] Absolute Mode Active. S${season}E${episode} -> #${targetAbsoluteNumber}`);
-    if (isDemonSlayer) console.log(`[Special] Demon Slayer Logic: Season ${season}`);
-
+    console.log(`\n=== Xử lý (v43): "${originalName}" | TMDB: ${tmdbVietnamese || "N/A"} ===`);
+    
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
     const searchPromises = uniqueQueries.map(q => 
         axios.get(`${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(q)}.json`, 
-            { headers: HEADERS, timeout: 5000 }).catch(() => null)
+            { headers: HEADERS, timeout: 4000 }).catch(() => null)
     );
 
     const responses = await Promise.all(searchPromises);
@@ -359,7 +345,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
         if (strictVietnameseMatches.length > 0) matchedCandidates = strictVietnameseMatches; 
     }
 
-    // [MODIFIED] Removed Game of Thrones Exception
     if (matchedCandidates.length > 1 && !isHarryPotter && !useSmartRegex && !targetAbsoluteNumber && !isDemonSlayer) {
         const oClean = normalizeForSearch(originalName);
         const goldenMatches = matchedCandidates.filter(m => {
@@ -370,7 +355,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
         if (goldenMatches.length > 0 && matchedCandidates.length > goldenMatches.length) { }
     }
     
-    // [MODIFIED] Removed Game of Thrones Exception
     if (hasYear && matchedCandidates.length > 1 && !isHarryPotter && !useSmartRegex && !targetAbsoluteNumber && !isDemonSlayer) {
         const exactMatches = matchedCandidates.filter(m => checkExactYear(m, year));
         if (exactMatches.length > 0) matchedCandidates = exactMatches;
@@ -381,11 +365,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
             const mClean = normalizeForSearch(m.name);
             const qClean = normalizeForSearch(originalName);
             if (mappedVietnameseList.length > 0) {
-                const matchesMap = mappedVietnameseList.some(map => {
-                    const mapClean = normalizeForSearch(map);
-                    return mClean.includes(mapClean);
-                });
-                if (matchesMap) return true;
+                if (mappedVietnameseList.some(map => mClean.includes(normalizeForSearch(map)))) return true;
             }
             const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
             const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
@@ -395,9 +375,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     }
 
     if (matchedCandidates.length === 0) return { streams: [] };
-    console.log(`-> KẾT QUẢ CUỐI CÙNG:`);
-    matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
-
+    
     let allStreams = [];
     const hpKeywords = getHPKeywords(originalName);
 
@@ -412,12 +390,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     let streams = sRes.data.streams;
                     if (useSmartRegex && targetEpisodeTitle) {
                         const titleRegex = createSmartRegex(targetEpisodeTitle);
-                        if (titleRegex) {
-                            streams = streams.filter(s => {
-                                const sName = s.title || s.name || "";
-                                return titleRegex.test(sName);
-                            });
-                        }
+                        if (titleRegex) streams = streams.filter(s => titleRegex.test(s.title || s.name || ""));
                     } 
                     else if (isHarryPotter && hpKeywords) {
                         streams = streams.filter(s => {
@@ -456,8 +429,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         const info = extractEpisodeInfo(vidName);
                         if (info && info.e === targetAbsoluteNumber) return true;
                         const regexAbs = new RegExp(`(?:^|\\s|e|ep|#)${targetAbsoluteNumber}(?:\\s|$|\\.)`, 'i');
-                        if (regexAbs.test(vidName)) return true;
-                        return false;
+                        return regexAbs.test(vidName);
                     });
                 }
                 else if (isDemonSlayer) {
@@ -465,23 +437,20 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         matchedVideos = matchedVideos.filter(vid => {
                             const name = (vid.title || vid.name || "").toLowerCase();
                             if (name.includes("hashira") || name.includes("geiko") || name.includes("mugen") || name.includes("yuukaku") || name.includes("katanakaji")) return false;
-                            const epRegex = new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`);
-                            return epRegex.test(name);
+                            return new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`).test(name);
                         });
                     } 
                     else if (season === 5) {
                         matchedVideos = matchedVideos.filter(vid => {
                             const name = (vid.title || vid.name || "").toLowerCase();
                             if (!name.includes("hashira") && !name.includes("geiko")) return false;
-                            const epRegex = new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`);
-                            return epRegex.test(name);
+                            return new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`).test(name);
                         });
                     }
                     else {
                         matchedVideos = matchedVideos.filter(vid => {
                             const info = extractEpisodeInfo(vid.title || vid.name || "");
-                            if (!info) return false;
-                            return info.s === season && info.e === episode;
+                            return info && info.s === season && info.e === episode;
                         });
                     }
                 }
@@ -491,8 +460,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         const info = extractEpisodeInfo(vidName);
                         if (!info) return false;
                         if (isRegularShow && season <= 2) {
-                            const strictSeasonRegex = new RegExp(`(?:s|season)\\s?0?${season}|${season}x`, 'i');
-                            if (!strictSeasonRegex.test(vidName)) return false;
+                            if (!new RegExp(`(?:s|season)\\s?0?${season}|${season}x`, 'i').test(vidName)) return false;
                         }
                         if (info.s === 0) return season === 1 && info.e === episode; 
                         return info.s === season && info.e === episode;
@@ -514,24 +482,20 @@ builder.defineStreamHandler(async ({ type, id }) => {
                             } 
                             else if (targetAbsoluteNumber) {
                                 const info = extractEpisodeInfo(streamTitle);
-                                if (info) {
-                                    if (info.e !== targetAbsoluteNumber) return;
-                                } else {
-                                    const regexAbs = new RegExp(`(?:^|\\s|e|ep|#)${targetAbsoluteNumber}(?:\\s|$|\\.)`, 'i');
-                                    if (!regexAbs.test(streamTitle)) return;
+                                if (info) { if (info.e !== targetAbsoluteNumber) return; } 
+                                else {
+                                    if (!new RegExp(`(?:^|\\s|e|ep|#)${targetAbsoluteNumber}(?:\\s|$|\\.)`, 'i').test(streamTitle)) return;
                                 }
                             }
                             else if (isDemonSlayer) {
                                 const sName = streamTitle.toLowerCase();
                                 if (season === 1) {
                                      if (sName.includes("hashira") || sName.includes("geiko")) return;
-                                     const epRegex = new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`);
-                                     if (!epRegex.test(sName)) return;
+                                     if (!new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`).test(sName)) return;
                                 }
                                 else if (season === 5) {
                                     if (!sName.includes("hashira") && !sName.includes("geiko")) return;
-                                    const epRegex = new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`);
-                                    if (!epRegex.test(sName)) return;
+                                    if (!new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`).test(sName)) return;
                                 }
                                 else {
                                     const streamInfo = extractEpisodeInfo(streamTitle);
@@ -542,8 +506,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 const streamInfo = extractEpisodeInfo(streamTitle);
                                 if (!streamInfo) return; 
                                 if (isRegularShow && season <= 2) {
-                                    const strictSeasonRegex = new RegExp(`(?:s|season)\\s?0?${season}|${season}x`, 'i');
-                                    if (!strictSeasonRegex.test(streamTitle)) return;
+                                    if (!new RegExp(`(?:s|season)\\s?0?${season}|${season}x`, 'i').test(streamTitle)) return;
                                 }
                                 if (streamInfo.s === 0) { 
                                     if (season !== 1) return;
