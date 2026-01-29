@@ -2,7 +2,7 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require("axios");
 
 const TARGET_MANIFEST_URL = process.env.TARGET_MANIFEST_URL;
-const TMDB_TOKEN = process.env.TMDB_ACCESS_TOKEN; 
+const TMDB_TOKEN = process.env.TMDB_ACCESS_TOKEN; // API KEY (v3)
 
 if (!TARGET_MANIFEST_URL) {
     console.error("LỖI: Chưa set TARGET_MANIFEST_URL");
@@ -16,15 +16,16 @@ const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 };
 
-// === IN-MEMORY CACHE (Bí mật tốc độ của Webstreamr) ===
-// Lưu trữ: { "tt123456": "Tên Tiếng Việt" }
-const TMDB_CACHE = {}; 
+// === GLOBAL CACHE (RAM) ===
+// Lưu trữ kết quả dịch tên để không phải hỏi TMDB nhiều lần
+// Format: { "tt1234567": "Tên Tiếng Việt" }
+const TITLE_CACHE = new Map();
 
 const builder = new addonBuilder({
     id: "com.phim4k.vip.final.v43",
     version: "43.0.0",
     name: "Phim4K VIP (Speed Optimized)",
-    description: "Cached TMDB + Parallel Requests + Absolute Numbering",
+    description: "TMDB Auto-Map + In-Memory Cache + Parallel Search",
     resources: ["stream"],
     types: ["movie", "series"],
     idPrefixes: ["tt"],
@@ -34,6 +35,7 @@ const builder = new addonBuilder({
 // === 1. TỪ ĐIỂN MAPPING (Clean) ===
 const VIETNAMESE_MAPPING = {
     "oppenheimer": ["oppenheimer 2023"],
+    // --- HARRY POTTER COLLECTION ---
     "harry potter and the sorcerer's stone": ["harry potter colection"],
     "harry potter and the philosopher's stone": ["harry potter colection"],
     "harry potter and the chamber of secrets": ["harry potter colection"],
@@ -45,19 +47,19 @@ const VIETNAMESE_MAPPING = {
     "harry potter and the deathly hallows: part 2": ["harry potter colection"],
 };
 
-// === TMDB HELPER (WITH CACHING) ===
+// === TMDB HELPER WITH CACHE ===
 async function getTmdbVietnameseTitle(imdbId, type) {
     if (!TMDB_TOKEN) return null;
 
     // 1. Kiểm tra Cache trước (Tốc độ ánh sáng)
-    if (TMDB_CACHE[imdbId]) {
-        console.log(`[Cache Hit] TMDB for ${imdbId}: "${TMDB_CACHE[imdbId]}"`);
-        return TMDB_CACHE[imdbId];
+    if (TITLE_CACHE.has(imdbId)) {
+        console.log(`[Cache Hit] Lấy tên tiếng Việt từ RAM: ${imdbId}`);
+        return TITLE_CACHE.get(imdbId);
     }
 
     try {
         const url = `https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_TOKEN}&external_source=imdb_id&language=vi-VN`;
-        const res = await axios.get(url, { timeout: 2000 }); // Giảm timeout xuống 2s để ko bị treo lâu
+        const res = await axios.get(url, { timeout: 2500 }); // Giảm timeout xuống 2.5s để không block lâu
 
         if (!res.data) return null;
 
@@ -71,18 +73,21 @@ async function getTmdbVietnameseTitle(imdbId, type) {
             const originalTitle = type === 'movie' ? item.original_title : item.original_name;
             
             if (viTitle && viTitle.toLowerCase() !== originalTitle.toLowerCase()) {
+                console.log(`[TMDB API] Found: "${viTitle}" -> Lưu vào Cache`);
                 // 2. Lưu vào Cache
-                TMDB_CACHE[imdbId] = viTitle;
-                console.log(`[TMDB API] Fetched & Cached for ${imdbId}: "${viTitle}"`);
+                TITLE_CACHE.set(imdbId, viTitle);
+                
+                // Giới hạn Cache (Tránh tràn RAM nếu chạy quá lâu)
+                if (TITLE_CACHE.size > 2000) {
+                    const firstKey = TITLE_CACHE.keys().next().value;
+                    TITLE_CACHE.delete(firstKey);
+                }
                 return viTitle;
             }
         }
     } catch (e) {
         console.error(`[TMDB Error] ${imdbId}: ${e.message}`);
     }
-    
-    // Nếu không tìm thấy hoặc lỗi, lưu null vào cache để lần sau đỡ hỏi lại (Cache tiêu cực)
-    TMDB_CACHE[imdbId] = null; 
     return null;
 }
 
@@ -103,13 +108,8 @@ function getHPKeywords(originalName) {
 // === CALCULATOR ===
 function getMHAOffset(season) {
     switch (season) {
-        case 2: return 14;
-        case 3: return 40;
-        case 4: return 65;
-        case 5: return 92;
-        case 6: return 119;
-        case 7: return 149;
-        case 8: return 170;
+        case 2: return 14; case 3: return 40; case 4: return 65;
+        case 5: return 92; case 6: return 119; case 7: return 149; case 8: return 170;
         default: return 0;
     }
 }
@@ -120,8 +120,8 @@ function getNarutoShippudenOffset(season) {
         case 6: return 112; case 7: return 143; case 8: return 151; case 9: return 175;
         case 10: return 196; case 11: return 222; case 12: return 242; case 13: return 260;
         case 14: return 295; case 15: return 320; case 16: return 348; case 17: return 361;
-        case 18: return 393; case 19: return 413; case 20: return 431; case 21: return 450;
-        case 22: return 458; default: return 0;
+        case 18: return 393; case 19: return 413; case 20: return 431; case 21: return 450; case 22: return 458;
+        default: return 0;
     }
 }
 
@@ -202,16 +202,19 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
         for (const mappedVietnamese of mappedVietnameseList) {
             const mappedClean = normalizeForSearch(mappedVietnamese);
             if (mappedClean.length <= 3) {
-                if (new RegExp(`(^|\\s|\\W)${mappedClean}($|\\s|\\W)`, 'i').test(serverClean)) return true;
+                const strictRegex = new RegExp(`(^|\\s|\\W)${mappedClean}($|\\s|\\W)`, 'i');
+                if (strictRegex.test(serverClean)) return true;
             } else {
                 if (serverClean.includes(mappedClean)) return true;
             }
         }
     }
+
     for (const query of queries) {
         const qClean = normalizeForSearch(query);
         if (qClean.length <= 9) {
-            if (new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i').test(serverClean)) return true;
+            const strictRegex = new RegExp(`(^|\\s|\\W)${qClean}($|\\s|\\W)`, 'i');
+            if (strictRegex.test(serverClean)) return true;
         } else {
             if (serverClean.includes(qClean)) return true;
         }
@@ -220,7 +223,8 @@ function isMatch(candidate, type, originalName, year, hasYear, mappedVietnameseL
 }
 
 function checkExactYear(candidate, targetYear) {
-    const yearMatches = candidate.name.match(/\d{4}/g);
+    const serverName = candidate.name;
+    const yearMatches = serverName.match(/\d{4}/g);
     if (yearMatches) return yearMatches.some(y => parseInt(y) === targetYear);
     if (candidate.releaseInfo) return candidate.releaseInfo.includes(targetYear.toString());
     return false;
@@ -241,6 +245,7 @@ function passesSubtitleCheck(candidateName, originalName, queries) {
     return true;
 }
 
+// === HANDLER TỐI ƯU SONG SONG (PARALLEL) ===
 builder.defineStreamHandler(async ({ type, id }) => {
     if (!id.startsWith("tt")) return { streams: [] };
 
@@ -248,17 +253,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
     const season = seasonStr ? parseInt(seasonStr) : null;
     const episode = episodeStr ? parseInt(episodeStr) : null;
 
-    // === TỐI ƯU TỐC ĐỘ: CHẠY SONG SONG (PARALLEL) ===
-    // Thay vì chờ Cinemeta xong mới gọi TMDB, ta gọi cả hai cùng lúc!
-    
-    const metaPromise = getCinemetaMetadata(type, imdbId);
-    
-    // Chỉ gọi TMDB nếu có token, chạy song song với metaPromise
-    const tmdbPromise = TMDB_TOKEN ? getTmdbVietnameseTitle(imdbId, type) : Promise.resolve(null);
+    // [OPTIMIZATION 1] BẮT ĐẦU GỌI TMDB NGAY LẬP TỨC (KHÔNG AWAIT)
+    const tmdbPromise = getTmdbVietnameseTitle(imdbId, type);
 
-    // Chờ cả 2 cùng hoàn thành (Thời gian = max(meta, tmdb))
-    const [meta, tmdbVietnamese] = await Promise.all([metaPromise, tmdbPromise]);
-
+    // [OPTIMIZATION 2] SONG SONG LẤY METADATA GỐC
+    const meta = await getCinemetaMetadata(type, imdbId);
     if (!meta) return { streams: [] };
 
     const originalName = meta.name;
@@ -266,7 +265,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
     let year = parseInt(meta.year);
     const hasYear = !isNaN(year); 
 
-    // === SPECIAL DETECTION ===
+    // === SPECIAL LOGIC ===
     const isTomAndJerry = lowerOrig.includes("tom and jerry");
     const isRegularShow = lowerOrig.includes("regular show");
     const isDemonSlayer = lowerOrig.includes("demon slayer") || lowerOrig.includes("kimetsu no yaiba");
@@ -286,56 +285,76 @@ builder.defineStreamHandler(async ({ type, id }) => {
         targetAbsoluteNumber = getAbsoluteTarget(originalName, season, episode);
     }
 
-    const queries = [];
-    
-    // Mapping thủ công
+    // === TẠO LIST QUERIES CƠ BẢN (KHÔNG CẦN CHỜ TMDB) ===
+    let initialQueries = [];
     let mappedVietnameseList = [];
+    
     const mappingRaw = VIETNAMESE_MAPPING[lowerOrig];
-    if (mappingRaw) mappedVietnameseList = Array.isArray(mappingRaw) ? mappingRaw : [mappingRaw];
-    mappedVietnameseList.forEach(name => queries.push(name));
-
-    // Mapping từ TMDB (Lấy từ kết quả chạy song song phía trên)
-    if (tmdbVietnamese) {
-        queries.push(tmdbVietnamese);
-        mappedVietnameseList.push(tmdbVietnamese); 
+    if (mappingRaw) {
+        const list = Array.isArray(mappingRaw) ? mappingRaw : [mappingRaw];
+        mappedVietnameseList = mappedVietnameseList.concat(list);
+        initialQueries = initialQueries.concat(list);
     }
 
-    // Standard Queries
-    queries.push(originalName);
+    initialQueries.push(originalName);
     const cleanName = normalizeForSearch(originalName);
-    if (cleanName !== lowerOrig) queries.push(cleanName);
+    if (cleanName !== lowerOrig) initialQueries.push(cleanName);
 
     if (originalName.includes(":")) {
         const splitName = originalName.split(":")[0].trim();
         const splitClean = normalizeForSearch(splitName);
-        if (splitClean.length > 3 || splitClean === 'f1') queries.push(splitName);
+        if (splitClean.length > 3 || splitClean === 'f1') initialQueries.push(splitName);
     }
-    if (/\d/.test(cleanName) && cleanName.includes(" ")) queries.push(cleanName.replace(/\s/g, ""));
+    if (/\d/.test(cleanName) && cleanName.includes(" ")) initialQueries.push(cleanName.replace(/\s/g, ""));
     const removeTheMovie = cleanName.replace(/\s+the movie$/, "").trim();
-    if (removeTheMovie !== cleanName && removeTheMovie.length > 0) queries.push(removeTheMovie);
+    if (removeTheMovie !== cleanName && removeTheMovie.length > 0) initialQueries.push(removeTheMovie);
 
-    const uniqueQueries = [...new Set(queries)];
-    console.log(`\n=== Xử lý (v43): "${originalName}" | TMDB: ${tmdbVietnamese || "N/A"} ===`);
-    
+    // [OPTIMIZATION 3] TÌM KIẾM PHẦN TÊN GỐC TRƯỚC (NON-BLOCKING)
+    const uniqueInitialQueries = [...new Set(initialQueries)];
     const catalogId = type === 'movie' ? 'phim4k_movies' : 'phim4k_series';
-    const searchPromises = uniqueQueries.map(q => 
+
+    console.log(`\n=== Speed Search (v43): "${originalName}" ===`);
+    
+    // Bắt đầu tìm kiếm với tên gốc
+    let searchPromises = uniqueInitialQueries.map(q => 
         axios.get(`${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(q)}.json`, 
-            { headers: HEADERS, timeout: 4000 }).catch(() => null)
+            { headers: HEADERS, timeout: 5000 }).catch(() => null)
     );
 
+    // [OPTIMIZATION 4] CHỜ TMDB & NẾU CÓ TÊN VIỆT -> BẮN TIẾP REQUEST TÌM KIẾM
+    // Lúc này các request tên gốc đã chạy được một lúc rồi, tiết kiệm thời gian
+    const tmdbVietnamese = await tmdbPromise; 
+    
+    if (tmdbVietnamese) {
+        console.log(`[Parallel] Got TMDB Title: "${tmdbVietnamese}" - Launching extra search...`);
+        mappedVietnameseList.push(tmdbVietnamese);
+        // Bắn thêm request tìm kiếm tên tiếng Việt
+        searchPromises.push(
+            axios.get(`${TARGET_BASE_URL}/catalog/${type}/${catalogId}/search=${encodeURIComponent(tmdbVietnamese)}.json`, 
+                { headers: HEADERS, timeout: 5000 }).catch(() => null)
+        );
+    }
+
+    // Chờ tất cả kết quả về
     const responses = await Promise.all(searchPromises);
+    
+    // Tổng hợp kết quả
     let allCandidates = [];
     responses.forEach(res => {
         if (res && res.data && res.data.metas) allCandidates = allCandidates.concat(res.data.metas);
     });
     allCandidates = allCandidates.filter((v,i,a)=>a.findIndex(t=>(t.id === v.id))===i);
 
+    // Từ đây xử lý logic lọc như cũ
+    const finalQueries = [...uniqueInitialQueries];
+    if (tmdbVietnamese) finalQueries.push(tmdbVietnamese);
+
     let matchedCandidates = allCandidates.filter(m => 
-        isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, uniqueQueries)
+        isMatch(m, type, originalName, year, hasYear, mappedVietnameseList, finalQueries)
     );
 
     const isHarryPotter = lowerOrig.includes("harry potter");
-    matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, uniqueQueries));
+    matchedCandidates = matchedCandidates.filter(m => passesSubtitleCheck(m.name, originalName, finalQueries));
 
     if (mappedVietnameseList.length > 0) {
         const strictVietnameseMatches = matchedCandidates.filter(m => {
@@ -365,7 +384,11 @@ builder.defineStreamHandler(async ({ type, id }) => {
             const mClean = normalizeForSearch(m.name);
             const qClean = normalizeForSearch(originalName);
             if (mappedVietnameseList.length > 0) {
-                if (mappedVietnameseList.some(map => mClean.includes(normalizeForSearch(map)))) return true;
+                const matchesMap = mappedVietnameseList.some(map => {
+                    const mapClean = normalizeForSearch(map);
+                    return mClean.includes(mapClean);
+                });
+                if (matchesMap) return true;
             }
             const endsWithExact = new RegExp(`[\\s]${qClean}$`, 'i').test(mClean);
             const isExact = mClean === qClean || mClean === `${qClean} ${year}`;
@@ -375,10 +398,13 @@ builder.defineStreamHandler(async ({ type, id }) => {
     }
 
     if (matchedCandidates.length === 0) return { streams: [] };
-    
+    console.log(`-> KẾT QUẢ CUỐI CÙNG:`);
+    matchedCandidates.forEach(m => console.log(`   + ${m.name}`));
+
     let allStreams = [];
     const hpKeywords = getHPKeywords(originalName);
 
+    // Lấy streams song song (nếu có nhiều kết quả)
     const streamPromises = matchedCandidates.map(async (match) => {
         const fullId = match.id;
         try {
@@ -390,7 +416,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     let streams = sRes.data.streams;
                     if (useSmartRegex && targetEpisodeTitle) {
                         const titleRegex = createSmartRegex(targetEpisodeTitle);
-                        if (titleRegex) streams = streams.filter(s => titleRegex.test(s.title || s.name || ""));
+                        if (titleRegex) {
+                            streams = streams.filter(s => {
+                                const sName = s.title || s.name || "";
+                                return titleRegex.test(sName);
+                            });
+                        }
                     } 
                     else if (isHarryPotter && hpKeywords) {
                         streams = streams.filter(s => {
@@ -429,7 +460,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         const info = extractEpisodeInfo(vidName);
                         if (info && info.e === targetAbsoluteNumber) return true;
                         const regexAbs = new RegExp(`(?:^|\\s|e|ep|#)${targetAbsoluteNumber}(?:\\s|$|\\.)`, 'i');
-                        return regexAbs.test(vidName);
+                        if (regexAbs.test(vidName)) return true;
+                        return false;
                     });
                 }
                 else if (isDemonSlayer) {
@@ -437,20 +469,23 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         matchedVideos = matchedVideos.filter(vid => {
                             const name = (vid.title || vid.name || "").toLowerCase();
                             if (name.includes("hashira") || name.includes("geiko") || name.includes("mugen") || name.includes("yuukaku") || name.includes("katanakaji")) return false;
-                            return new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`).test(name);
+                            const epRegex = new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`);
+                            return epRegex.test(name);
                         });
                     } 
                     else if (season === 5) {
                         matchedVideos = matchedVideos.filter(vid => {
                             const name = (vid.title || vid.name || "").toLowerCase();
                             if (!name.includes("hashira") && !name.includes("geiko")) return false;
-                            return new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`).test(name);
+                            const epRegex = new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`);
+                            return epRegex.test(name);
                         });
                     }
                     else {
                         matchedVideos = matchedVideos.filter(vid => {
                             const info = extractEpisodeInfo(vid.title || vid.name || "");
-                            return info && info.s === season && info.e === episode;
+                            if (!info) return false;
+                            return info.s === season && info.e === episode;
                         });
                     }
                 }
@@ -460,7 +495,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
                         const info = extractEpisodeInfo(vidName);
                         if (!info) return false;
                         if (isRegularShow && season <= 2) {
-                            if (!new RegExp(`(?:s|season)\\s?0?${season}|${season}x`, 'i').test(vidName)) return false;
+                            const strictSeasonRegex = new RegExp(`(?:s|season)\\s?0?${season}|${season}x`, 'i');
+                            if (!strictSeasonRegex.test(vidName)) return false;
                         }
                         if (info.s === 0) return season === 1 && info.e === episode; 
                         return info.s === season && info.e === episode;
@@ -475,27 +511,30 @@ builder.defineStreamHandler(async ({ type, id }) => {
                     if (sRes.data && sRes.data.streams) {
                         sRes.data.streams.forEach(s => {
                             const streamTitle = s.title || s.name || "";
-                            
                             if (useSmartRegex && targetEpisodeTitle) {
                                 const titleRegex = createSmartRegex(targetEpisodeTitle);
                                 if (titleRegex && !titleRegex.test(streamTitle)) return;
                             } 
                             else if (targetAbsoluteNumber) {
                                 const info = extractEpisodeInfo(streamTitle);
-                                if (info) { if (info.e !== targetAbsoluteNumber) return; } 
-                                else {
-                                    if (!new RegExp(`(?:^|\\s|e|ep|#)${targetAbsoluteNumber}(?:\\s|$|\\.)`, 'i').test(streamTitle)) return;
+                                if (info) {
+                                    if (info.e !== targetAbsoluteNumber) return;
+                                } else {
+                                    const regexAbs = new RegExp(`(?:^|\\s|e|ep|#)${targetAbsoluteNumber}(?:\\s|$|\\.)`, 'i');
+                                    if (!regexAbs.test(streamTitle)) return;
                                 }
                             }
                             else if (isDemonSlayer) {
                                 const sName = streamTitle.toLowerCase();
                                 if (season === 1) {
                                      if (sName.includes("hashira") || sName.includes("geiko")) return;
-                                     if (!new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`).test(sName)) return;
+                                     const epRegex = new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`);
+                                     if (!epRegex.test(sName)) return;
                                 }
                                 else if (season === 5) {
                                     if (!sName.includes("hashira") && !sName.includes("geiko")) return;
-                                    if (!new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`).test(sName)) return;
+                                    const epRegex = new RegExp(`(?:^|\\s)0?${episode}(?:\\.|\\s|$)`);
+                                    if (!epRegex.test(sName)) return;
                                 }
                                 else {
                                     const streamInfo = extractEpisodeInfo(streamTitle);
@@ -506,7 +545,8 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                 const streamInfo = extractEpisodeInfo(streamTitle);
                                 if (!streamInfo) return; 
                                 if (isRegularShow && season <= 2) {
-                                    if (!new RegExp(`(?:s|season)\\s?0?${season}|${season}x`, 'i').test(streamTitle)) return;
+                                    const strictSeasonRegex = new RegExp(`(?:s|season)\\s?0?${season}|${season}x`, 'i');
+                                    if (!strictSeasonRegex.test(streamTitle)) return;
                                 }
                                 if (streamInfo.s === 0) { 
                                     if (season !== 1) return;
@@ -515,7 +555,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
                                     if (streamInfo.s !== season || streamInfo.e !== episode) return;
                                 }
                             }
-
                             episodeStreams.push({
                                 name: `Phim4K S${season}E${episode}`,
                                 title: (s.title || vid.title) + `\n[${match.name}]`,
